@@ -15,8 +15,6 @@ import { PieceView, Plant, Tree } from './ShopPieces';
 import type { StationView } from './ShopPieces';
 import { CustomerGroup, Person } from './Customers';
 import type { CrowdState } from './Customers';
-import { PlayerAvatar } from './Player';
-import type { PlayerState } from './Player';
 import { Cube, p, pts, polygon } from './isoGeometry';
 
 function Bench({ x, y }: { x: number; y: number }) {
@@ -60,7 +58,8 @@ export interface ArrangeApi {
   cancel: () => void;
 }
 
-export interface ServiceHint { id: string; label: string; count: number }
+/** A service point (till, workbench) the player can click on directly. */
+export interface ServiceSpot { id: string; label: string; count: number }
 
 /**
  * The camera of the shop view. Everything that belongs to the scene – walls,
@@ -85,14 +84,13 @@ export function cameraViewBox(shop: Shop) {
   return `${(centerX - width / 2).toFixed(1)} ${(centerY - height / 2).toFixed(1)} ${width.toFixed(1)} ${height.toFixed(1)}`;
 }
 
-function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy = false, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, preview = false, noGround = false, dark = false }: {
+function IsoShop({ kind, shop, editing = false, crowd, onServe, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, preview = false, noGround = false, dark = false }: {
   kind: ShopKind;
   shop: Shop;
   editing?: boolean;
   crowd?: CrowdState | null;
-  player?: PlayerState | null;
-  serviceHint?: ServiceHint | null;
-  busy?: boolean;
+  /** Serving a waiting customer starts right here: click on the till or a service station. */
+  onServe?: (serviceId: string) => void;
   onInteract?: Interaction;
   onInspect?: (good: VisibleGood) => void;
   onMove?: (id: string, place: Placement) => void;
@@ -151,9 +149,11 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
   }, [shop.expansions]);
   const walkers = crowd?.walkers ?? [];
   const queuePads = crowd ? serviceQueues(kind, shop, blocked).map(queue => ({ queue, waiting: (crowd.queues[queue.info.id] || []).length })) : [];
-  const hintKind = serviceHint ? (serviceHint.id.split('-')[0] as Piece['kind']) : null;
-  const hintPlace = serviceHint && hintKind ? placeOf(layout, { id: serviceHint.id, kind: hintKind, index: 0 }) : null;
-  const hintSize = hintKind && hintPlace ? footprint(hintKind, hintPlace.rot) : null;
+  const serviceSpots: ServiceSpot[] = serviceQueues(kind, shop, blocked).map(entry => ({
+    id: entry.info.id,
+    label: entry.info.label,
+    count: crowd ? (crowd.queues[entry.info.id] || []).length : 0,
+  }));
 
   const stationJobs = shop.queue.slice(0, Math.min(shop.furniture.workbench, shop.staff));
   const stations: StationView[] = pieces.filter(piece => piece.kind === 'workbench').map(piece => {
@@ -186,6 +186,11 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     if (!onInteract || editing) return { label: PLACE_LABELS[piece.kind] };
     if (piece.kind === 'shelf') return { label: `Regal ${piece.index + 1}: ${(display.shelves[piece.index] || []).length} Produkte sichtbar. Anklicken zum Einrichten.`, onClick: () => onInteract('furnishing', 'shelf') };
     if (piece.kind === 'materials') return { label: 'Rohstoff-Vorrat ansehen', onClick: () => onInteract('inventory') };
+    const service = serviceSpots.find(entry => entry.id === piece.id);
+    if (service) return {
+      label: service.count > 0 ? `${service.label}: ${service.count} wartend. Anklicken und bedienen.` : `${service.label}: niemand wartet. Anklicken und bedienen.`,
+      onClick: () => onServe?.(service.id),
+    };
     if (piece.kind === 'register') return { label: 'Kasse und Einrichtung verwalten', onClick: () => onInteract('furnishing', 'register') };
     if (piece.kind === 'workbench') return { label: it ? 'Reparaturbank öffnen' : tcg ? 'Sortiertisch und Produktion öffnen' : 'Backstube öffnen', onClick: () => onInteract('production') };
     if (piece.kind === 'showcase') return { label: tcg ? 'Booster-Pack öffnen oder Ware auswählen' : 'Auslage ansehen oder Ware auswählen', onClick: () => onInteract('special') };
@@ -488,22 +493,25 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     {queuePads.filter(entry => entry.waiting > 0).map(({ queue, waiting }) => <g key={`queue-${queue.info.id}`} className="queue-pads" pointerEvents="none">
       {queue.spots.slice(0, Math.max(waiting, 1)).map((spot, index) => <g key={`${spot.x}-${spot.y}`}>
         <polygon points={polygon([[spot.x + .12, spot.y + .12, FLOOR_Z + .005], [spot.x + .88, spot.y + .12, FLOOR_Z + .005], [spot.x + .88, spot.y + .88, FLOOR_Z + .005], [spot.x + .12, spot.y + .88, FLOOR_Z + .005]])} className="queue-pad" />
-        {index === 0 && <text x={p(spot.x + .5, spot.y + .5, FLOOR_Z)[0]} y={p(spot.x + .5, spot.y + .5, FLOOR_Z)[1] + 3} textAnchor="middle" className="queue-pad-label">{waiting}</text>}
+        {index === 0 && <text x={p(spot.x + .5, spot.y + .5, FLOOR_Z)[0]} y={p(spot.x + .5, spot.y + .5, FLOOR_Z)[1] + 3} textAnchor="middle" className="queue-pad-label" fontSize={10} fontWeight={800} fill="#6f8a63">{waiting}</text>}
       </g>)}
     </g>)}
-    {serviceHint && hintPlace && hintSize && <g className="service-marker" pointerEvents="none">
-      <polygon points={polygon([[hintPlace.x - .06, hintPlace.y - .06, FLOOR_Z + .012], [hintPlace.x + hintSize.w + .06, hintPlace.y - .06, FLOOR_Z + .012], [hintPlace.x + hintSize.w + .06, hintPlace.y + hintSize.d + .06, FLOOR_Z + .012], [hintPlace.x - .06, hintPlace.y + hintSize.d + .06, FLOOR_Z + .012]] as [number, number, number][])} className="service-ring" />
-      {(() => {
-        const [bx, by] = p(hintPlace.x + hintSize.w / 2, hintPlace.y + hintSize.d / 2, 3.3);
-        const width = Math.max(126, serviceHint.label.length * 8.6 + 96);
-        return <g transform={`translate(${bx},${by})`} className="service-badge-group">
+    {serviceSpots.filter(spot => spot.count > 0).map(spot => {
+      const spotKind = spot.id.split('-')[0] as Piece['kind'];
+      const place = placeOf(layout, { id: spot.id, kind: spotKind, index: 0 });
+      const size = footprint(spotKind, place.rot);
+      const [bx, by] = p(place.x + size.w / 2, place.y + size.d / 2, 3.3);
+      const width = Math.max(150, spot.label.length * 8.6 + 132);
+      return <g key={`service-${spot.id}`} className="service-marker" pointerEvents="none" role="status" aria-label={`${spot.label}: ${spot.count} wartend, anklicken zum Bedienen`}>
+        <polygon points={polygon([[place.x - .06, place.y - .06, FLOOR_Z + .012], [place.x + size.w + .06, place.y - .06, FLOOR_Z + .012], [place.x + size.w + .06, place.y + size.d + .06, FLOOR_Z + .012], [place.x - .06, place.y + size.d + .06, FLOOR_Z + .012]] as [number, number, number][])} className="service-ring" />
+        <g transform={`translate(${bx},${by})`} className="service-badge-group">
           <rect x={-width / 2} y={-19} width={width} height={30} rx={15} className="service-badge" />
-          <circle cx={-width / 2 + 19} cy={-4} r={9.5} className="service-badge-key" />
-          <text x={-width / 2 + 19} y={-.5} textAnchor="middle" className="service-badge-key-text">E</text>
-          <text x={-width / 2 + 35} y={.5} className="service-badge-text">{serviceHint.label}{serviceHint.count > 0 ? ` · ${serviceHint.count} wartend` : ' · niemand wartet'}</text>
-        </g>;
-      })()}
-    </g>}
+          <rect x={-width / 2 + 10} y={-14} width={16} height={21} rx={7.5} className="service-badge-key" />
+          <path d={`M${-width / 2 + 18} -10v5`} className="service-badge-key-line" />
+          <text x={-width / 2 + 34} y={.5} className="service-badge-text" fontSize={11} fontWeight={700} fill="#f1f7ec">{spot.label} bedienen · {spot.count} wartend</text>
+        </g>
+      </g>;
+    })}
     {(() => {
       // One list keeps the DOM nodes of the pieces alive while dragging; the
       // dragged piece is simply drawn last so it lies on top.
@@ -512,7 +520,6 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     })()}
     {staffSpots.map(([x, y], index) => <Person key={`staff-${index}`} x={x} y={y} color={index === 0 ? '#96aabe' : '#b5a0c5'} staff />)}
     {showCustomers && <CustomerGroup walkers={walkers} />}
-    {player && <PlayerAvatar player={player} busy={busy} />}
     <Cube x={-.22} y={roomD} w={6.9} d={.2} h={.75} top={wallTop} left={wallDeep} right={wallLight} />
     <g transform={`translate(${p(1.15,roomD + .24,.8).join(',')}) rotate(26.565)`}>
       <text fill="#fffdfd" fontSize="12" fontWeight="800" letterSpacing="1.4">{shop.name.toUpperCase()}</text>
@@ -562,16 +569,15 @@ function EmptyPlot({ x, y, label, onClick }: { x: number; y: number; label: stri
   </g>;
 }
 
-export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null, player = null, serviceHint = null, busy = false, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, onSelect }: {
+export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null, onServe, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, onSelect }: {
   game: GameState;
   kind: ShopKind;
   mode: 'shop' | 'mall';
   zoom: number;
   editing?: boolean;
   crowd?: CrowdState | null;
-  player?: PlayerState | null;
-  serviceHint?: ServiceHint | null;
-  busy?: boolean;
+  /** Clicking a till or service station serves the customer waiting there. */
+  onServe?: (serviceId: string) => void;
   onInteract: Interaction;
   onInspect: (good: VisibleGood) => void;
   onMove?: (id: string, place: Placement) => void;
@@ -592,7 +598,7 @@ export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null
     <defs><filter id="scene-shadow" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="12" stdDeviation="8" floodColor="#809c89" floodOpacity=".12" /></filter></defs>
     <g transform={`translate(430 250) scale(${zoom}) translate(-430 -250)`}>
       {mode === 'shop'
-        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} crowd={crowd} player={player} serviceHint={serviceHint} busy={busy} onInteract={onInteract} onInspect={onInspect} onMove={onMove} arrangeApi={arrangeApi} onArrangeInfo={onArrangeInfo} selected={selected} preview={!game.hasChosen} dark={game.theme === 'dark'} /></g>
+        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} crowd={crowd} onServe={onServe} onInteract={onInteract} onInspect={onInspect} onMove={onMove} arrangeApi={arrangeApi} onArrangeInfo={onArrangeInfo} selected={selected} preview={!game.hasChosen} dark={game.theme === 'dark'} /></g>
         : <g>
           <polygon points="35,216 443,12 817,202 410,422" fill="#e1eae0" />
           <path d="M160 275L550 80M250 330L654 128M330 180L653 341" stroke="#eeeee8" strokeWidth="36" />

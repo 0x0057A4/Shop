@@ -9,13 +9,11 @@ import { createShopDisplay, displayedQuantity } from '../game/visualInventory';
 import { Brand, Icon, Modal, Progress, ShopIcon } from './Ui';
 import type { IconName } from './Ui';
 import { IsoScene } from './IsoScene';
-import type { ArrangeApi, ArrangeInfo, ServiceHint } from './IsoScene';
+import type { ArrangeApi, ArrangeInfo, ServiceSpot } from './IsoScene';
 import { useCrowd } from './Customers';
-import { PLAYER_STEP_MS, usePlayer } from './Player';
-import type { PlayerFacing } from './Player';
 import { serviceQueues } from '../game/services';
 import type { QueueCustomer } from '../game/services';
-import { PLACE_LABELS, blockedTiles, freeSides, gridOf, piecesOf, placeOf, rotatable } from '../game/layout';
+import { PLACE_LABELS, blockedTiles, piecesOf, placeOf, rotatable } from '../game/layout';
 import { RegisterGame } from './RegisterGame';
 import { GoodPortrait } from './IsoGoods';
 import type { UpdateGame } from './ManagementViews';
@@ -57,49 +55,35 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
   const displayed=[...display.showcase,...display.center,...display.shelves.flat()];
   const crowdActive=mode === 'shop' && game.hasChosen && shop.open && displayed.length > 0;
   const crowd=useCrowd(kind,shop,display,crowdActive,game.paused);
-  const playerActive=mode === 'shop' && game.hasChosen && !editLayout && !uiBlocked && !serving;
-  const { player, walk } = usePlayer(shop,kind,playerActive);
   const blockedSet=blockedTiles(shop.layout);
   const services=serviceQueues(kind,shop,blockedSet);
-  const nearby=mode === 'shop' && game.hasChosen ? services.find(entry => {
-    const tiles=[...freeSides(entry.info.place,entry.info.kind,blockedSet,gridOf(shop)),...entry.spots];
-    return tiles.some(tile => Math.abs(tile.x - player.tile.x) <= 1 && Math.abs(tile.y - player.tile.y) <= 1);
-  }) : undefined;
-  const waiting=nearby ? crowd.waiting(nearby.info.id) : 0;
-  const employeeInReach=nearby ? !!crowd.frontAt(nearby.info.id,nearby.spots[0]) : false;
-  const serveHint:ServiceHint|null=nearby ? { id:nearby.info.id, label:nearby.info.label, count:waiting } : null;
-  const openRegister=()=>{
-    if(mode !== 'shop' || !game.hasChosen) return;
-    if(!nearby){notify('Geh zu einer Kasse oder Dienstleistung, um Kunden zu bedienen.');return;}
-    const customer=crowd.frontAt(nearby.info.id,nearby.spots[0]);
+  /** Clicking a service point is all it takes to serve the queue standing there. */
+  const serveService=(serviceId:string)=>{
+    if(uiBlocked || mode !== 'shop' || !game.hasChosen) return;
+    const entry=services.find(item => item.info.id === serviceId);
+    if(!entry) return;
+    const waiting=crowd.waiting(entry.info.id);
+    const customer=crowd.frontAt(entry.info.id,entry.spots[0]);
     if(!customer){
-      if(waiting > 0) notify(`Der Kunde ist noch unterwegs zur ${nearby.info.label}.`);
-      else notify(`An der ${nearby.info.label} wartet gerade niemand.`);
+      if(waiting > 0) notify(`Der Kunde ist noch unterwegs zur ${entry.info.label}.`);
+      else notify(`An der ${entry.info.label} wartet gerade niemand.`);
       return;
     }
-    setServing({serviceId:nearby.info.id,customer});
+    setServing({serviceId:entry.info.id,customer});
   };
-  const serveRef=useRef(openRegister);
-  serveRef.current=openRegister;
-  const padHold=useRef<number|null>(null);
-  const startWalk=(direction:PlayerFacing)=>{
-    walk(direction);
-    if(padHold.current)window.clearInterval(padHold.current);
-    padHold.current=window.setInterval(()=>walk(direction),PLAYER_STEP_MS);
+  const waitingServices=services
+    .map(entry => ({ entry, waiting: crowd.waiting(entry.info.id) }))
+    .filter(item => item.waiting > 0)
+    .sort((a,b) => b.waiting - a.waiting);
+  const serveHint:ServiceSpot|null=waitingServices.length
+    ? { id:waitingServices[0].entry.info.id, label:waitingServices[0].entry.info.label, count:waitingServices.reduce((sum,item) => sum + item.waiting, 0) }
+    : null;
+  /** The toolbar button serves whoever waits the longest. */
+  const openRegister=()=>{
+    if(mode !== 'shop' || !game.hasChosen) return;
+    if(!waitingServices.length){notify('Gerade wartet niemand an Kasse oder Dienstleistung.');return;}
+    serveService(waitingServices[0].entry.info.id);
   };
-  const stopWalk=()=>{if(padHold.current){window.clearInterval(padHold.current);padHold.current=null;}};
-  useEffect(()=>{
-    if(!playerActive) return;
-    const onKey=(event:KeyboardEvent)=>{
-      if(event.repeat || (event.key !== 'e' && event.key !== 'E')) return;
-      const target=event.target as HTMLElement|null;
-      if(target && (['INPUT','TEXTAREA','SELECT'].includes(target.tagName) || target.isContentEditable)) return;
-      event.preventDefault();
-      serveRef.current();
-    };
-    window.addEventListener('keydown',onKey);
-    return ()=>window.removeEventListener('keydown',onKey);
-  },[playerActive]);
   const payCustomer=(perfect:boolean)=>{
     if(!serving) return {tip:0,earned:0};
     const result=checkout(readGame(),kind,serving.customer,perfect);
@@ -113,7 +97,6 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
     const following=crowd.front(serviceId);
     setServing(following ? {serviceId,customer:following} : null);
   };
-  useEffect(()=>stopWalk,[]);
   const skipCustomer=()=>{
     if(!serving) return;
     const leaving=serving.customer;
@@ -147,9 +130,6 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
     return()=>window.clearInterval(timer);
   },[hasCashier,mode,game.hasChosen,game.paused,shop.open]);
   servingRef.current=serving;
-  const waitingServices=services
-    .map(entry=>({ info:entry.info, waiting:crowd.waiting(entry.info.id), total:crowd.front(entry.info.id)?.total ?? 0 }))
-    .filter(entry=>entry.waiting > 0);
   const card=selected?.type === 'card' ? shop.cards.find(entry=>entry.id === selected.id) : undefined;
   const quantity=item ? shop.stock[item.id] || 0 : card && !card.sold ? 1 : 0;
   const name=item?.name ?? card?.name ?? (selected?.type === 'card' ? selected.name : '');
@@ -162,21 +142,18 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
   };
   const fullScreen=async()=>{try{if(document.fullscreenElement) await document.exitFullscreen();else await ref.current?.requestFullscreen();}catch{notify('Die Vollbildansicht wird von diesem Browser nicht unterstützt.');}};
   return <div className="world-panel" ref={ref}><div className="world-heading"><button className="world-shop-selector" onClick={()=>onModal('shops')}><span className="world-shop-icon" style={{backgroundColor:SHOPS[kind].light,color:SHOPS[kind].color}}><ShopIcon kind={kind} size={22}/></span><span><strong>{shop.name}</strong><small>{SHOPS[kind].label} <span>·</span> {game.hasChosen ? 'Dein Laden' : 'Deine erste Geschichte'}</small></span><Icon name="down" size={15}/></button><div className="world-heading-actions"><button className={`button secondary small world-browse ${browse ? 'active' : ''}`} disabled={mode==='mall'} aria-label={browse ? 'Warenübersicht schliessen' : 'Warenübersicht öffnen'} title="Warenübersicht" aria-expanded={browse} onClick={()=>setBrowse(open=>!open)}><Icon name="eye" size={15}/>Waren</button><button className="button secondary small world-furnish" disabled={!game.hasChosen} onClick={()=>onNavigate('furnishing')}><Icon name="pencil" size={14}/>Einrichten</button></div></div>
-    <div className="world-stage"><div className="world-stage-toolbar"><div className="world-view-tabs"><button className={mode === 'shop' ? 'active' : ''} onClick={()=>{setMode('shop');setZoom(1);}}><Icon name="store" size={14}/>Ladenansicht</button><button className={mode === 'mall' ? 'active' : ''} onClick={()=>{setMode('mall');setZoom(1);}}><Icon name="grid" size={14}/>Meine Mall</button></div><div className="world-stage-right"><button className={`button secondary small world-serve ${employeeInReach ? 'is-ready' : ''}`} disabled={!nearby || !employeeInReach} title={nearby ? `Mit E bedienen (${nearby.info.label})` : 'Geh mit WASD oder den Pfeiltasten zu einer Kasse oder Dienstleistung'} onClick={openRegister}><Icon name="register" size={14}/>Bedienen{waiting > 0 && <span className="serve-badge">{waiting}</span>}{employeeInReach && <kbd>E</kbd>}</button><button className="button secondary small world-expand" disabled={mode === 'mall' || !nextExpansion(shop) || game.coins < (nextExpansion(shop)?.cost ?? 0)} title={nextExpansion(shop) ? `Verkaufsfläche erweitern: ${nextExpansion(shop)!.label} für ${money2(nextExpansion(shop)!.cost)}` : 'Deine Verkaufsfläche ist voll ausgebaut'} onClick={()=>{if(mode !== 'shop')setMode('shop');update(g=>expandShop(g,kind),'Deine Verkaufsfläche ist gewachsen!');}}><Icon name="expand" size={14}/>Erweitern</button><button className={`button secondary small world-arrange ${editLayout ? 'active' : ''}`} disabled={!game.hasChosen || mode === 'mall'} aria-pressed={editLayout} title="Möbel auf den Kacheln verschieben" onClick={()=>{if(mode !== 'shop')setMode('shop');onEditLayout(!editLayout);}}><Icon name={editLayout ? 'check' : 'move'} size={14}/>{editLayout ? 'Fertig' : 'Anordnen'}</button><span className={`world-live ${game.paused ? 'is-paused' : ''}`}><i/>{!game.hasChosen ? 'VORSCHAU' : game.paused ? 'PAUSIERT' : 'DEINE MALL LEBT'}</span></div></div>
-      <IsoScene game={game} kind={kind} mode={mode} zoom={zoom} editing={editLayout && mode === 'shop'} arrangeApi={arrangeApi} onArrangeInfo={setArrangeInfo} crowd={mode === 'shop' ? crowd.state : null} player={mode === 'shop' && game.hasChosen ? player : null} serviceHint={editLayout ? null : serveHint} busy={!!serving} onInteract={interact} onInspect={setSelected} onMove={(id:string,place:Placement)=>update(g=>movePlaceable(g,kind,id,place))} selected={selected} onSelect={k=>{if(game.hasChosen)update(g=>({...g,selected:k}));setMode('shop');setZoom(1);}}/>
+    <div className="world-stage"><div className="world-stage-toolbar"><div className="world-view-tabs"><button className={mode === 'shop' ? 'active' : ''} onClick={()=>{setMode('shop');setZoom(1);}}><Icon name="store" size={14}/>Ladenansicht</button><button className={mode === 'mall' ? 'active' : ''} onClick={()=>{setMode('mall');setZoom(1);}}><Icon name="grid" size={14}/>Meine Mall</button></div><div className="world-stage-right"><button className={`button secondary small world-serve ${waitingServices.length ? 'is-ready' : ''}`} disabled={mode === 'mall' || !waitingServices.length} title={waitingServices.length ? `${waitingServices[0].entry.info.label} bedienen (${waitingServices.reduce((sum,item) => sum + item.waiting, 0)} wartend)` : 'Gerade wartet niemand an Kasse oder Dienstleistung'} onClick={openRegister}><Icon name="register" size={14}/>Bedienen{waitingServices.length > 0 && <span className="serve-badge">{waitingServices.reduce((sum,item) => sum + item.waiting, 0)}</span>}</button><button className="button secondary small world-expand" disabled={mode === 'mall' || !nextExpansion(shop) || game.coins < (nextExpansion(shop)?.cost ?? 0)} title={nextExpansion(shop) ? `Verkaufsfläche erweitern: ${nextExpansion(shop)!.label} für ${money2(nextExpansion(shop)!.cost)}` : 'Deine Verkaufsfläche ist voll ausgebaut'} onClick={()=>{if(mode !== 'shop')setMode('shop');update(g=>expandShop(g,kind),'Deine Verkaufsfläche ist gewachsen!');}}><Icon name="expand" size={14}/>Erweitern</button><button className={`button secondary small world-arrange ${editLayout ? 'active' : ''}`} disabled={!game.hasChosen || mode === 'mall'} aria-pressed={editLayout} title="Möbel auf den Kacheln verschieben" onClick={()=>{if(mode !== 'shop')setMode('shop');onEditLayout(!editLayout);}}><Icon name={editLayout ? 'check' : 'move'} size={14}/>{editLayout ? 'Fertig' : 'Anordnen'}</button><span className={`world-live ${game.paused ? 'is-paused' : ''}`}><i/>{!game.hasChosen ? 'VORSCHAU' : game.paused ? 'PAUSIERT' : 'DEINE MALL LEBT'}</span></div></div>
+      <IsoScene game={game} kind={kind} mode={mode} zoom={zoom} editing={editLayout && mode === 'shop'} arrangeApi={arrangeApi} onArrangeInfo={setArrangeInfo} crowd={mode === 'shop' ? crowd.state : null} onServe={editLayout ? undefined : serveService} onInteract={interact} onInspect={setSelected} onMove={(id:string,place:Placement)=>update(g=>movePlaceable(g,kind,id,place))} selected={selected} onSelect={k=>{if(game.hasChosen)update(g=>({...g,selected:k}));setMode('shop');setZoom(1);}}/>
       {mode === 'shop' && game.hasChosen && waitingServices.length > 0 && <div className="queue-panel" role="status" aria-live="polite">
         <span className="queue-panel-head"><Icon name="bell" size={14}/>Wartende Kundschaft</span>
-        {waitingServices.map(entry=><div className={`queue-panel-row ${entry.info.id === nearby?.info.id ? 'is-near' : ''}`} key={entry.info.id}>
+        {waitingServices.map(item=><div className={`queue-panel-row ${serveHint?.id === item.entry.info.id ? 'is-near' : ''}`} key={item.entry.info.id}>
           <span className="queue-dot" aria-hidden="true"/>
-          <span className="queue-panel-label">{entry.info.label}</span>
-          <strong>{entry.waiting}</strong>
-          {entry.total > 0 && <small>{money2(entry.total)}</small>}
-          {entry.info.id === nearby?.info.id && employeeInReach
-            ? <button type="button" className="queue-serve" onClick={openRegister}>Bedienen <kbd>E</kbd></button>
-            : <span className="queue-hint">{entry.info.id === nearby?.info.id ? 'wartet auf dich' : 'geh dorthin'}</span>}
+          <span className="queue-panel-label">{item.entry.info.label}</span>
+          <strong>{item.waiting}</strong>
+          <button type="button" className="queue-serve" onClick={()=>serveService(item.entry.info.id)}><Icon name="register" size={12}/>Bedienen</button>
         </div>)}
       </div>}
-      <span className="scene-hint"><Icon name={editLayout ? 'move' : 'eye'} size={14}/>{editLayout ? arrangeInfo ? `${arrangeInfo.label}: ziehen oder Pfeiltasten bewegen${arrangeInfo.canRotate ? ', R dreht' : ''}.` : 'Möbel anklicken und ziehen – Pfeiltasten bewegen, R dreht.' : mode === 'shop' ? game.hasChosen ? 'Du bist die grüne Figur: WASD oder Pfeiltasten laufen, E bedient die Schlange an der Kasse.' : 'Ware anklicken: Produkt und echten Bestand ansehen.' : 'Wähle einen Laden oder eröffne eine neue Fläche.'}</span>
+      <span className="scene-hint"><Icon name={editLayout ? 'move' : 'eye'} size={14}/>{editLayout ? arrangeInfo ? `${arrangeInfo.label}: ziehen oder Pfeiltasten bewegen${arrangeInfo.canRotate ? ', R dreht' : ''}.` : 'Möbel anklicken und ziehen – Pfeiltasten bewegen, R dreht.' : mode === 'shop' ? game.hasChosen ? 'Kasse oder Dienstleistung anklicken – schon wird die wartende Kundschaft bedient.' : 'Ware anklicken: Produkt und echten Bestand ansehen.' : 'Wähle einen Laden oder eröffne eine neue Fläche.'}</span>
       {editLayout && mode === 'shop' && <div className="layout-editor-bar">
         <Icon name="move" size={15}/>
         <span className="editor-choice">{arrangeInfo ? <><strong>{arrangeInfo.label}</strong> gewählt</> : 'Möbel anklicken, um es zu bewegen'}</span>
@@ -196,10 +173,6 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
         <button type="button" className="button secondary small" disabled={!arrangeInfo || !arrangeInfo.canRotate} title={arrangeInfo?.canRotate ? 'Möbelstück drehen (R)' : 'Dieses Möbelstück lässt sich nicht drehen'} onClick={()=>arrangeApi.current?.rotate()}><Icon name="reset" size={14}/>Drehen <kbd>R</kbd></button>
         <button type="button" className="text-button" disabled={!arrangeInfo} onClick={()=>arrangeApi.current?.clear()}>Abwählen</button>
         <button type="button" className="text-button" onClick={()=>onEditLayout(false)}>Fertig</button>
-      </div>}
-      {mode === 'shop' && game.hasChosen && !editLayout && <div className={`player-pad ${serving ? 'is-dimmed' : ''}`} aria-label="Bewegung">
-        {(['up','left','right','down'] as PlayerFacing[]).map(direction => <button key={direction} type="button" className={`pad-button pad-${direction}`} disabled={!playerActive} aria-label={`Nach ${direction === 'up' ? 'hinten' : direction === 'down' ? 'vorn' : direction === 'left' ? 'links' : 'rechts'} gehen`} onPointerDown={event=>{event.preventDefault();startWalk(direction);}} onPointerUp={stopWalk} onPointerLeave={stopWalk} onPointerCancel={stopWalk} onContextMenu={event=>event.preventDefault()}>{direction === 'up' ? '▲' : direction === 'down' ? '▼' : direction === 'left' ? '◀' : '▶'}</button>)}
-        <button type="button" className="pad-button pad-action" disabled={!nearby || !employeeInReach} onClick={openRegister} aria-label="Schlange bedienen">E</button>
       </div>}
       <div className="camera-controls"><button className="icon-button" onClick={()=>setZoom(Math.min(1.5,Math.round((zoom+.1)*10)/10))} disabled={zoom >= 1.5} aria-label="Ansicht vergrössern"><Icon name="plus" size={17}/></button><button className="icon-button" onClick={()=>setZoom(Math.max(.7,Math.round((zoom-.1)*10)/10))} disabled={zoom <= .7} aria-label="Ansicht verkleinern"><Icon name="minus" size={17}/></button><span/><button className="icon-button" onClick={()=>setZoom(1)} aria-label="Ansicht zurücksetzen"><Icon name="reset" size={16}/></button><button className="icon-button" onClick={fullScreen} aria-label="Vollbildansicht"><Icon name="maximize" size={16}/></button></div>
     </div><AnimatePresence>{browse && <motion.div className="scene-catalog" initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} transition={{duration:.22}}>
