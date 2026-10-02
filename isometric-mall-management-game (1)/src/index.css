@@ -1047,6 +1047,25 @@ kbd { font-family: inherit; font-size: 7px; padding: 3px 5px; border: 1px solid 
 .customer-bob { animation: customer-step var(--step-ms, .42s) ease-in-out infinite; transform-origin: 0 0; }
 @keyframes customer-step { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.7px); } }
 .simulation-paused .customer-bob { animation-play-state: paused; }
+
+/* --- Laufzyklus: Beine, Arme und Schatten schwingen im Takt eines Kachelschritts --- */
+.person-leg, .person-arm { transform-box: view-box; }
+.person-figure.is-walking .person-leg, .person-figure.is-walking .person-arm {
+  animation-duration: var(--step-ms, .42s);
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+.person-figure.is-walking .person-leg { animation-name: person-leg-front; }
+.person-figure.is-walking .person-leg.is-back { animation-name: person-leg-back; }
+.person-figure.is-walking .person-arm { animation-name: person-arm-front; }
+.person-figure.is-walking .person-arm.is-back { animation-name: person-arm-back; }
+@keyframes person-leg-front { 0%, 100% { transform: rotate(-9deg); } 50% { transform: rotate(7deg) translateY(-1.5px); } }
+@keyframes person-leg-back { 0%, 100% { transform: rotate(7deg) translateY(-1.5px); } 50% { transform: rotate(-9deg); } }
+@keyframes person-arm-front { 0%, 100% { transform: rotate(8deg); } 50% { transform: rotate(-8deg); } }
+@keyframes person-arm-back { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(8deg); } }
+.customer-walker.is-walking .customer-shadow { animation: customer-shadow var(--step-ms, .42s) ease-in-out infinite; transform-origin: 0 0; }
+@keyframes customer-shadow { 0%, 100% { transform: scale(1); opacity: .15; } 50% { transform: scale(.86); opacity: .11; } }
+.simulation-paused .person-leg, .simulation-paused .person-arm, .simulation-paused .customer-shadow { animation-play-state: paused; }
 .arrange-note { display: flex; align-items: center; gap: 13px; padding: 15px 17px; border: 1px dashed #cbdac0; border-radius: 9px; background: #f7faf3; margin-bottom: 19px; }
 .arrange-note .arrange-icon { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; background: #e9f0e0; color: #75925f; flex: none; }
 .arrange-note h3 { font-size: 11.5px; font-weight: 700; color: #66805e; }

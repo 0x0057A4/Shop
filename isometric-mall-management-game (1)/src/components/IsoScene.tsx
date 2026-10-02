@@ -13,7 +13,8 @@ import { serviceQueues } from '../game/services';
 import { staffRole } from '../game/engine';
 import { PieceView, Plant, Tree } from './ShopPieces';
 import type { StationView } from './ShopPieces';
-import { CustomerGroup, Person } from './Customers';
+import { CustomerFigure, Person } from './Customers';
+import { currentTile } from './Customers';
 import type { CrowdState } from './Customers';
 import { Cube, p, pts, polygon } from './isoGeometry';
 
@@ -82,6 +83,20 @@ export function cameraViewBox(shop: Shop) {
   if (width / height < aspect) width = height * aspect; else height = width / aspect;
   const centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
   return `${(centerX - width / 2).toFixed(1)} ${(centerY - height / 2).toFixed(1)} ${width.toFixed(1)} ${height.toFixed(1)}`;
+}
+
+/**
+ * Depth of a piece standing on the floor: its middle, counted in tiles away
+ * from the top corner of the shop. Bigger means closer to the viewer.
+ */
+export function depthOfPlace(place: Placement, kind: PlaceableKind) {
+  const size = footprint(kind, place.rot);
+  return place.x + size.w / 2 + place.y + size.d / 2;
+}
+
+/** Depth of a person standing in the middle of a spot on the floor. */
+export function depthOfPerson(x: number, y: number) {
+  return x + y;
 }
 
 function IsoShop({ kind, shop, editing = false, crowd, onServe, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, preview = false, noGround = false, dark = false }: {
@@ -513,13 +528,37 @@ function IsoShop({ kind, shop, editing = false, crowd, onServe, onInteract, onIn
       </g>;
     })}
     {(() => {
-      // One list keeps the DOM nodes of the pieces alive while dragging; the
-      // dragged piece is simply drawn last so it lies on top.
+      // Furniture, staff and customers share one list, sorted by how far back
+      // they stand on the floor: the shelves really cover the people behind
+      // them and the people in front cover the shelves. One list also keeps the
+      // DOM nodes of the pieces alive while dragging; the dragged piece simply
+      // gets the highest depth so it lies on top of everything.
       const list = drag ? [...ordered.filter(entry => entry.piece.id !== drag.id), ...ordered.filter(entry => entry.piece.id === drag.id)] : ordered;
-      return list.map(entry => pieceNode(entry.piece, drag?.id === entry.piece.id ? drag.place : entry.place, drag?.id === entry.piece.id));
+      const items: { key: string; depth: number; node: ReactNode }[] = list.map(entry => {
+        const lifted = drag?.id === entry.piece.id;
+        const place = lifted ? drag!.place : entry.place;
+        return {
+          key: `piece-${entry.piece.id}`,
+          depth: lifted ? Number.MAX_SAFE_INTEGER : depthOfPlace(place, entry.piece.kind),
+          node: pieceNode(entry.piece, place, lifted),
+        };
+      });
+      staffSpots.forEach(([x, y], index) => items.push({
+        key: `staff-${index}`,
+        depth: depthOfPerson(x, y),
+        node: <Person key={`staff-${index}`} x={x} y={y} color={index === 0 ? '#96aabe' : '#b5a0c5'} staff />,
+      }));
+      if (showCustomers) walkers.forEach(walker => {
+        const tile = currentTile(walker);
+        items.push({
+          key: `walker-${walker.id}`,
+          depth: depthOfPerson(tile.x + .5, tile.y + .5),
+          node: <CustomerFigure key={`walker-${walker.id}`} walker={walker} />,
+        });
+      });
+      items.sort((a, b) => a.depth - b.depth);
+      return items.map(item => item.node);
     })()}
-    {staffSpots.map(([x, y], index) => <Person key={`staff-${index}`} x={x} y={y} color={index === 0 ? '#96aabe' : '#b5a0c5'} staff />)}
-    {showCustomers && <CustomerGroup walkers={walkers} />}
     <Cube x={-.22} y={roomD} w={6.9} d={.2} h={.75} top={wallTop} left={wallDeep} right={wallLight} />
     <g transform={`translate(${p(1.15,roomD + .24,.8).join(',')}) rotate(26.565)`}>
       <text fill="#fffdfd" fontSize="12" fontWeight="800" letterSpacing="1.4">{shop.name.toUpperCase()}</text>

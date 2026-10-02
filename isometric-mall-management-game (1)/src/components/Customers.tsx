@@ -305,31 +305,63 @@ export function useCrowd(kind: ShopKind, shop: Shop, display: ShopDisplay, activ
   };
 }
 
-/** The walking customers of one shop. */
+/** All walking customers of one shop, each one drawn on its own. */
 export function CustomerGroup({ walkers }: { walkers: WalkerState[] }) {
   return <g className="customer-layer">
-    {walkers.map(walker => {
-      const tile = here(walker);
-      const [px, py] = p(tile.x + .5, tile.y + .5, .4);
-      return <Walker key={walker.id} px={px} py={py} color={walker.color} walking={walker.pause === 0 && walker.step < walker.path.length - 1} carry={walker.customer && walker.serviceId?.startsWith('workbench') ? 'box' : 'bag'} waiting={walker.phase === 'queue'} />;
-    })}
+    {walkers.map(walker => <CustomerFigure key={walker.id} walker={walker} />)}
   </g>;
 }
 
+/**
+ * Which way a customer looks: one step to the right goes down-right on screen,
+ * one step back up-left, so the sign of the screen movement decides it.
+ */
+export function stepFacing(walker: WalkerState): 'left' | 'right' {
+  const tile = here(walker);
+  const previous = walker.path[Math.max(0, walker.step - 1)] ?? tile;
+  return ((tile.x - previous.x) - (tile.y - previous.y)) < 0 ? 'left' : 'right';
+}
+
+/**
+ * One customer as a standalone node. The scene sorts every customer in with the
+ * furniture by its floor depth, so the shop really stands in front of them.
+ */
+export function CustomerFigure({ walker }: { walker: WalkerState }) {
+  const tile = here(walker);
+  const [px, py] = p(tile.x + .5, tile.y + .5, .4);
+  const walking = walker.pause === 0 && walker.step < walker.path.length - 1;
+  return <Walker px={px} py={py} color={walker.color} walking={walking}
+    facing={stepFacing(walker)}
+    arriving={walker.step >= walker.path.length - 1}
+    carry={walker.customer && walker.serviceId?.startsWith('workbench') ? 'box' : 'bag'}
+    waiting={walker.phase === 'queue'} />;
+}
+
 /** An animated customer; the figure glides from tile to tile instead of jumping. */
-export function Walker({ px, py, color, walking, carry = 'bag', waiting = false }: { px: number; py: number; color: string; walking: boolean; carry?: 'bag' | 'box'; waiting?: boolean }) {
-  return <SmoothGroup className="customer-walker" x={px} y={py} ms={CUSTOMER_GLIDE_MS} style={{ '--step-ms': `${CUSTOMER_GLIDE_MS}ms` } as CSSProperties}>
-    <ellipse cx="0" cy="0" rx="10" ry="4.5" fill="#68768c" opacity=".15" />
-    <g className={walking ? 'customer-bob' : ''}><PersonFigure color={color} carry={carry} waiting={waiting} /></g>
+export function Walker({ px, py, color, walking, facing = 'right', arriving = false, carry = 'bag', waiting = false }: { px: number; py: number; color: string; walking: boolean; facing?: 'left' | 'right'; arriving?: boolean; carry?: 'bag' | 'box'; waiting?: boolean }) {
+  // On the way the walker keeps a steady pace, only the last step eases in.
+  const ease = walking && !arriving ? 'linear' : 'smooth';
+  return <SmoothGroup className={`customer-walker ${walking ? 'is-walking' : ''}`} x={px} y={py} ms={CUSTOMER_GLIDE_MS} ease={ease} style={{ '--step-ms': `${CUSTOMER_GLIDE_MS}ms` } as CSSProperties}>
+    <ellipse className="customer-shadow" cx="0" cy="0" rx="10" ry="4.5" fill="#68768c" opacity=".15" />
+    <g transform={facing === 'left' ? 'scale(-1 1)' : undefined}>
+      <g className={walking ? 'customer-bob' : ''}><PersonFigure color={color} carry={carry} waiting={waiting} walking={walking} /></g>
+    </g>
   </SmoothGroup>;
 }
 
 /** The body of a person, drawn with the feet at the local origin. */
-export function PersonFigure({ color, staff = false, carry = 'bag', waiting = false }: { color: string; staff?: boolean; carry?: 'bag' | 'box' | 'none'; waiting?: boolean }) {
-  return <g className={waiting ? 'customer-waiting' : ''}>
-    <path d="M-3 -17l-1 14m9-14l1 14" stroke="#475168" strokeWidth="4.5" strokeLinecap="round" />
-    <path d="M-5 -2h-4m15 0h4" stroke="#354159" strokeWidth="3" strokeLinecap="round" />
-    <path d="M-7 -31l-4 13m18-13l4 13" stroke={color} strokeWidth="5" strokeLinecap="round" />
+export function PersonFigure({ color, staff = false, carry = 'bag', waiting = false, walking = false }: { color: string; staff?: boolean; carry?: 'bag' | 'box' | 'none'; waiting?: boolean; walking?: boolean }) {
+  // Legs and arms hang on their own pivot so the walk cycle can swing them.
+  const leg = (back: boolean) => <g key={back ? 'leg-back' : 'leg-front'} className={`person-leg ${back ? 'is-back' : ''} ${walking ? 'is-walking' : ''}`} style={{ transformOrigin: back ? '-3px -17px' : '6px -17px' }}>
+    <path d={back ? 'M-3 -17l-1 14' : 'M6 -17l1 14'} stroke="#475168" strokeWidth="4.5" strokeLinecap="round" />
+    <path d={back ? 'M-5 -2h-4' : 'M4 -2h4'} stroke="#354159" strokeWidth="3" strokeLinecap="round" />
+  </g>;
+  const arm = (back: boolean) => <g key={back ? 'arm-back' : 'arm-front'} className={`person-arm ${back ? 'is-back' : ''} ${walking ? 'is-walking' : ''}`} style={{ transformOrigin: back ? '-7px -31px' : '11px -31px' }}>
+    <path d={back ? 'M-7 -31l-4 13' : 'M11 -31l4 13'} stroke={color} strokeWidth="5" strokeLinecap="round" />
+  </g>;
+  return <g className={`person-figure ${walking ? 'is-walking' : ''} ${waiting ? 'customer-waiting' : ''}`}>
+    {leg(true)}{leg(false)}
+    {arm(true)}{arm(false)}
     <path d="M-7 -32q7-5 14 0l1 17q-8 4-16 0z" fill={color} />
     {staff && <path d="M-4 -29h8l3 14h-14z" fill="#f2f1db" opacity=".9" />}
     <rect x="-2.5" y="-38" width="5" height="7" rx="2" fill="#e6b694" />
