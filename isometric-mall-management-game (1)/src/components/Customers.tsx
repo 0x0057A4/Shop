@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import type { Shop, ShopKind } from '../game/data';
 import type { ShopDisplay } from '../game/visualInventory';
 import type { Tile } from '../game/layout';
@@ -7,10 +8,13 @@ import type { QueueCustomer } from '../game/services';
 import { makeCustomer, serviceQueues } from '../game/services';
 import type { ServiceQueue } from '../game/services';
 import { p } from './isoGeometry';
+import { SmoothGroup } from './Motion';
 
 export const CUSTOMER_COLORS = ['#ddb28c', '#89abc3', '#c89eab', '#88b8a4', '#c190ae', '#7498b3', '#e0ad67', '#8aada1'];
-/** Milliseconds per tile step. The CSS transition of a walker uses the same rhythm. */
-export const CUSTOMER_TICK_MS = 700;
+/** Milliseconds per tile step. */
+export const CUSTOMER_TICK_MS = 420;
+/** How long a walker glides from one tile to the next; slightly shorter than the tick. */
+export const CUSTOMER_GLIDE_MS = 400;
 const MAX_WALKERS = 5;
 
 type Phase = 'arrive' | 'browse' | 'queue' | 'leave';
@@ -150,8 +154,13 @@ export function stepCrowd(state: CrowdState, kind: ShopKind, shop: Shop, display
       if (exit) next.push({ ...withPath(walker, exit), phase: 'leave', serviceId: null, customer: null });
       continue;
     }
-    // Arrived at the end of the current path.
-    if (walker.phase === 'leave') continue;
+    // Arrived at the end of the current path. Customers who are done walk out
+    // through the door instead of vanishing at the counter.
+    if (walker.phase === 'leave') {
+      const exit = planOutside(here(walker), context);
+      if (exit && exit.length > 1) next.push(withPath(walker, exit));
+      continue;
+    }
     if (walker.phase === 'queue') { next.push(walker); continue; }
     const at = here(walker);
     if (walker.phase === 'arrive') {
@@ -304,12 +313,12 @@ export function CustomerGroup({ walkers }: { walkers: WalkerState[] }) {
   </g>;
 }
 
-/** An animated customer. Position changes are animated by CSS transitions. */
+/** An animated customer; the figure glides from tile to tile instead of jumping. */
 export function Walker({ px, py, color, walking, carry = 'bag', waiting = false }: { px: number; py: number; color: string; walking: boolean; carry?: 'bag' | 'box'; waiting?: boolean }) {
-  return <g className="customer-walker" transform={`translate(${px.toFixed(2)}, ${py.toFixed(2)})`}>
+  return <SmoothGroup className="customer-walker" x={px} y={py} ms={CUSTOMER_GLIDE_MS} style={{ '--step-ms': `${CUSTOMER_GLIDE_MS}ms` } as CSSProperties}>
     <ellipse cx="0" cy="0" rx="10" ry="4.5" fill="#68768c" opacity=".15" />
     <g className={walking ? 'customer-bob' : ''}><PersonFigure color={color} carry={carry} waiting={waiting} /></g>
-  </g>;
+  </SmoothGroup>;
 }
 
 /** The body of a person, drawn with the feet at the local origin. */

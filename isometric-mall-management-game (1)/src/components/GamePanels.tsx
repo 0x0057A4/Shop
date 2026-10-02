@@ -11,7 +11,7 @@ import type { IconName } from './Ui';
 import { IsoScene } from './IsoScene';
 import type { ServiceHint } from './IsoScene';
 import { useCrowd } from './Customers';
-import { usePlayer } from './Player';
+import { PLAYER_STEP_MS, usePlayer } from './Player';
 import type { PlayerFacing } from './Player';
 import { serviceQueues } from '../game/services';
 import type { QueueCustomer } from '../game/services';
@@ -78,6 +78,13 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
   };
   const serveRef=useRef(openRegister);
   serveRef.current=openRegister;
+  const padHold=useRef<number|null>(null);
+  const startWalk=(direction:PlayerFacing)=>{
+    walk(direction);
+    if(padHold.current)window.clearInterval(padHold.current);
+    padHold.current=window.setInterval(()=>walk(direction),PLAYER_STEP_MS);
+  };
+  const stopWalk=()=>{if(padHold.current){window.clearInterval(padHold.current);padHold.current=null;}};
   useEffect(()=>{
     if(!playerActive) return;
     const onKey=(event:KeyboardEvent)=>{
@@ -103,6 +110,7 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
     const following=crowd.front(serviceId);
     setServing(following ? {serviceId,customer:following} : null);
   };
+  useEffect(()=>stopWalk,[]);
   const skipCustomer=()=>{
     if(!serving) return;
     const leaving=serving.customer;
@@ -128,7 +136,7 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
       <span className="scene-hint"><Icon name={editLayout ? 'move' : 'eye'} size={14}/>{editLayout ? 'Möbel ziehen: Pfeiltasten bewegen, R dreht, freie Kacheln sind grün.' : mode === 'shop' ? game.hasChosen ? 'Du bist die grüne Figur: WASD oder Pfeiltasten laufen, E bedient die Schlange an der Kasse.' : 'Ware anklicken: Produkt und echten Bestand ansehen.' : 'Wähle einen Laden oder eröffne eine neue Fläche.'}</span>
       {editLayout && mode === 'shop' && <div className="layout-editor-bar"><Icon name="move" size={15}/><span>Ziehe Möbel auf eine freie Kachel. <kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd> bewegen, <kbd>R</kbd> dreht.</span><button className="text-button" onClick={()=>onEditLayout(false)}>Fertig</button></div>}
       {mode === 'shop' && game.hasChosen && !editLayout && <div className={`player-pad ${serving ? 'is-dimmed' : ''}`} aria-label="Bewegung">
-        {(['up','left','right','down'] as PlayerFacing[]).map(direction => <button key={direction} type="button" className={`pad-button pad-${direction}`} disabled={!playerActive} aria-label={`Nach ${direction === 'up' ? 'hinten' : direction === 'down' ? 'vorn' : direction === 'left' ? 'links' : 'rechts'} gehen`} onPointerDown={event=>{event.preventDefault();walk(direction);}}>{direction === 'up' ? '▲' : direction === 'down' ? '▼' : direction === 'left' ? '◀' : '▶'}</button>)}
+        {(['up','left','right','down'] as PlayerFacing[]).map(direction => <button key={direction} type="button" className={`pad-button pad-${direction}`} disabled={!playerActive} aria-label={`Nach ${direction === 'up' ? 'hinten' : direction === 'down' ? 'vorn' : direction === 'left' ? 'links' : 'rechts'} gehen`} onPointerDown={event=>{event.preventDefault();startWalk(direction);}} onPointerUp={stopWalk} onPointerLeave={stopWalk} onPointerCancel={stopWalk} onContextMenu={event=>event.preventDefault()}>{direction === 'up' ? '▲' : direction === 'down' ? '▼' : direction === 'left' ? '◀' : '▶'}</button>)}
         <button type="button" className="pad-button pad-action" disabled={!nearby || !employeeInReach} onClick={openRegister} aria-label="Schlange bedienen">E</button>
       </div>}
       <div className="camera-controls"><button className="icon-button" onClick={()=>setZoom(Math.min(1.5,Math.round((zoom+.1)*10)/10))} disabled={zoom >= 1.5} aria-label="Ansicht vergrössern"><Icon name="plus" size={17}/></button><button className="icon-button" onClick={()=>setZoom(Math.max(.7,Math.round((zoom-.1)*10)/10))} disabled={zoom <= .7} aria-label="Ansicht verkleinern"><Icon name="minus" size={17}/></button><span/><button className="icon-button" onClick={()=>setZoom(1)} aria-label="Ansicht zurücksetzen"><Icon name="reset" size={16}/></button><button className="icon-button" onClick={fullScreen} aria-label="Vollbildansicht"><Icon name="maximize" size={16}/></button></div>

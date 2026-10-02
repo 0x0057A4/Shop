@@ -21,6 +21,7 @@ Eine deutschsprachige, lokal spielbare isometrische Einkaufszentrum-Simulation m
 - Kunden betreten den Laden durch die Tür, laufen zwischen den Möbeln hindurch, bleiben vor Regalen stehen und verlassen den Laden wieder. Sie folgen dabei den freien Kacheln, weichen Hindernissen aus und passen sich an, wenn du Möbel verschiebst. Ihre Zahl wächst mit der Beliebtheit.
 - Wer kaufen will, reiht sich hinter der Kasse oder der Werkbank in eine Schlange ein. Die Warteschlange ist auf dem Boden als Kette gestrichelter Felder sichtbar und rückt Stück für Stück vor. Läuft der vorderste Kunde an, ist die Kasse bereit.
 - Du steuerst eine eigene Spielfigur durch den Laden (grüne Figur mit Namensschild **DU**). Sie läuft über dieselben freien Kacheln wie die Kunden; Hindernisse, Wände und Möbel blockieren sie genauso.
+- Kunden und Spielfigur gleiten zwischen den Kacheln, statt zu springen. Die Szene wird dafür mit `requestAnimationFrame` Bild für Bild aktualisiert und weich beschleunigt und abgebremst. Wer **Bewegung reduzieren** in seinem System aktiviert hat, bekommt weiterhin direkte Schritte ohne Animation.
 - Stehst du neben Kasse oder Werkbank und ein Kunde ist vorgerückt, drückst du **E** oder den Knopf **Bedienen**. Dann beginnt der aktive Kassiervorgang: Warenkorb prüfen, bezahlen, Bon ansehen.
 - **Barzahlung:** Der Kunde gibt einen Schein, du stellst das Wechselgeld aus Scheinen und Münzen zusammen. Stimmt der Betrag exakt, gibt es 8 % Trinkgeld; zu viel ausgelegte Stücke nimmst du per Klick zurück.
 - **Kartenzahlung:** Der Kunde steckt die Karte ins Terminal, du ziehst sie mit Maus oder Finger einmal komplett von links nach rechts durch. Mit **→** (gedrückt halten) geht es auch per Tastatur.
@@ -53,6 +54,7 @@ Automatische Speicherung im Browserspeicher unter `mallside-save-v1`. Auch die M
 - `src/game/data.ts`: Ladentypen, Materialien, Rezepte und Einrichtungsdefinitionen.
 - `src/game/layout.ts`: Kachel-Raster, Grundflächen, Kollisionen, Pfadsuche für Kunden.
 - `src/game/services.ts`: Dienstleistungen und Kassen, Warteschlangenplätze, Warenkörbe, Scheine und Münzen, Wechselgeld-Rechnung.
+- `src/components/Motion.tsx`: weiche Zwischenbewegung der Figuren von Kachel zu Kachel.
 - `src/components/Player.tsx`: Spielfigur mit Tastatur- und Touchsteuerung.
 - `src/components/RegisterGame.tsx`: Kassiervorgang mit Bargeld- und Karten-Minispiel sowie Kassenbon.
 - `src/game/engine.ts`: Produktion, Handel, Reparaturen, Erweiterung, Möbelverschieben und Spielstand-Validierung.

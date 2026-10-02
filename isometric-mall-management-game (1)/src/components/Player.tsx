@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import type { Tile } from '../game/layout';
 import { GRID_H, GRID_W, blockedTiles, isWalkable } from '../game/layout';
 import type { Shop } from '../game/data';
 import { p } from './isoGeometry';
 import { PersonFigure } from './Customers';
+import { SmoothGroup } from './Motion';
 
 /** Screen-relative directions: on an isometric floor "up" means one tile back-left. */
 export const PLAYER_STEPS = {
@@ -13,7 +15,9 @@ export const PLAYER_STEPS = {
   right: { x: 1, y: -1 },
 } as const;
 export type PlayerFacing = keyof typeof PLAYER_STEPS;
-export const PLAYER_STEP_MS = 165;
+export const PLAYER_STEP_MS = 190;
+/** How long the figure glides from one tile to the next. */
+export const PLAYER_GLIDE_MS = 180;
 
 export interface PlayerState { tile: Tile; facing: PlayerFacing; moving: boolean }
 
@@ -65,7 +69,9 @@ export function usePlayer(shop: Shop, session: string, active: boolean) {
     });
   }, [blocked, shop]);
 
+  const lastStep = useRef(0);
   const step = useCallback((direction: PlayerFacing) => {
+    lastStep.current = performance.now();
     setPlayer(previous => {
       const delta = PLAYER_STEPS[direction];
       const tile = { x: previous.tile.x + delta.x, y: previous.tile.y + delta.y };
@@ -83,8 +89,8 @@ export function usePlayer(shop: Shop, session: string, active: boolean) {
       const target = event.target as HTMLElement | null;
       if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
       event.preventDefault();
-      held.current = direction;
-      if (!event.repeat) step(direction);
+      if (held.current !== direction) { held.current = direction; lastStep.current = 0; }
+      if (!event.repeat && performance.now() - lastStep.current >= PLAYER_STEP_MS * .8) step(direction);
     };
     const keyUp = (event: KeyboardEvent) => {
       const direction = KEY_DIRECTIONS[event.code] ?? KEY_DIRECTIONS[event.key];
@@ -92,7 +98,18 @@ export function usePlayer(shop: Shop, session: string, active: boolean) {
     };
     window.addEventListener('keydown', keyDown);
     window.addEventListener('keyup', keyUp);
-    const timer = window.setInterval(() => { if (held.current) step(held.current); }, PLAYER_STEP_MS);
+    // Keeps walking while a key is held; the due check stops a double step when a
+    // key is pressed right before the next tick.
+    const timer = window.setInterval(() => {
+      const since = performance.now() - lastStep.current;
+      if (!held.current) {
+        // Nobody walks any more: the figure stands still and stops bobbing.
+        if (since > PLAYER_STEP_MS) setPlayer(previous => (previous.moving ? { ...previous, moving: false } : previous));
+        return;
+      }
+      if (since < PLAYER_STEP_MS) return;
+      step(held.current);
+    }, PLAYER_STEP_MS / 3);
     return () => {
       window.removeEventListener('keydown', keyDown);
       window.removeEventListener('keyup', keyUp);
@@ -106,7 +123,7 @@ export function usePlayer(shop: Shop, session: string, active: boolean) {
 /** The player's own figure, with a marker that makes it easy to find. */
 export function PlayerAvatar({ player, busy = false }: { player: PlayerState; busy?: boolean }) {
   const [px, py] = p(player.tile.x + .5, player.tile.y + .5, .4);
-  return <g className="player-avatar" transform={`translate(${px.toFixed(2)}, ${py.toFixed(2)})`} aria-hidden="true">
+  return <SmoothGroup className="player-avatar" aria-hidden="true" x={px} y={py} ms={PLAYER_GLIDE_MS} style={{ '--step-ms': `${PLAYER_GLIDE_MS}ms` } as CSSProperties}>
     <ellipse className="player-ring" cx="0" cy="0" rx="13.5" ry="6.2" />
     <ellipse cx="0" cy="0" rx="9.5" ry="4.3" fill="#5c6f77" opacity=".18" />
     <g className={player.moving ? 'player-bob' : ''} transform={player.facing === 'left' ? 'scale(-1, 1)' : undefined}>
@@ -118,5 +135,5 @@ export function PlayerAvatar({ player, busy = false }: { player: PlayerState; bu
       <rect x="-15" y="-9" width="30" height="15" rx="7.5" fill="#3f6b52" />
       <text x="0" y="2" textAnchor="middle" fill="#f3f8ef" fontSize="8.4" fontWeight="800" letterSpacing=".6">DU</text>
     </g>
-  </g>;
+  </SmoothGroup>;
 }
