@@ -92,14 +92,14 @@ export function MaterialsShelf({ place, kind, units, shop, onInspect, selected }
 
 /** Glass display case in the front area. */
 export function ShowcaseCabinet({ place, kind, units, shop, onInspect, selected }: { place: Placement; kind: ShopKind; units: VisibleGood[]; shop: Shop; onInspect?: (good: VisibleGood) => void; selected?: VisibleGood | null }) {
-  const l: Local = { tx: place.x, ty: place.y, rot: 0 };
+  const l: Local = { tx: place.x, ty: place.y, rot: place.rot };
   const left = kind === 'tcg' ? '#c1afd7' : kind === 'it' ? '#a1bfcd' : '#d9b99a';
   const right = kind === 'tcg' ? '#d4c2e4' : kind === 'it' ? '#c3d9e0' : '#e9d1b4';
   return <g>
-    <Cube x={lx(l, .2, .1)} y={ly(l, .2, .1)} w={2.6} d={.95} h={.62} top="#d1bdde" left={left} right={right} />
+    <Box l={l} u={.2} v={.1} w={2.6} d={.95} h={.62} top="#d1bdde" left={left} right={right} />
     {units.map((unit, i) => <GoodFigure key={`showcase-${i}-${unit.id}`} x={lx(l, .34 + i * .48, .35)} y={ly(l, .34 + i * .48, .35)} z={1.01} good={unit} kind={kind} count={unit.type === 'card' ? 1 : shop.stock[unit.id]} selected={selected?.type === unit.type && selected.id === unit.id} onInspect={onInspect} />)}
     <g pointerEvents="none">
-      <Cube x={lx(l, .2, .1)} y={ly(l, .2, .1)} z={1.0} w={2.6} d={.95} h={.53} top="#eaf3f3" left="#d7eeee" right="#c9e4e9" opacity={.3} />
+      <Box l={l} u={.2} v={.1} z={1.0} w={2.6} d={.95} h={.53} top="#eaf3f3" left="#d7eeee" right="#c9e4e9" opacity={.3} />
       <polyline points={flat(l, [[.2, 1.05, 1], [.2, 1.05, 1.53], [2.8, 1.05, 1.53], [2.8, 1.05, 1]])} fill="none" stroke="#f8f6fd" strokeWidth="2" />
     </g>
   </g>;
@@ -107,31 +107,31 @@ export function ShowcaseCabinet({ place, kind, units, shop, onInspect, selected 
 
 /** Free-standing middle display for the newest highlights. */
 export function CenterDisplay({ place, kind, units, shop, onInspect, selected }: { place: Placement; kind: ShopKind; units: VisibleGood[]; shop: Shop; onInspect?: (good: VisibleGood) => void; selected?: VisibleGood | null }) {
-  const l: Local = { tx: place.x, ty: place.y, rot: 0 };
+  const l: Local = { tx: place.x, ty: place.y, rot: place.rot };
   const top = kind === 'it' ? '#c9dce2' : kind === 'tcg' ? '#e0d3ea' : '#e9d6ba';
   const left = kind === 'it' ? '#92b5c2' : kind === 'tcg' ? '#bda9d1' : '#cfac86';
   const right = kind === 'it' ? '#aecdd5' : kind === 'tcg' ? '#cab9dc' : '#dcc19c';
   return <g>
-    <Cube x={lx(l, .4, .05)} y={ly(l, .4, .05)} w={1.2} d={.9} h={.67} top={top} left={left} right={right} />
+    <Box l={l} u={.4} v={.05} w={1.2} d={.9} h={.67} top={top} left={left} right={right} />
     {units.map((unit, i) => <GoodFigure key={`center-${i}-${unit.id}`} x={lx(l, .45 + i * .4, .32)} y={ly(l, .45 + i * .4, .32)} z={1.06} good={unit} kind={kind} count={unit.type === 'card' ? 1 : shop.stock[unit.id]} selected={selected?.type === unit.type && selected.id === unit.id} onInspect={onInspect} />)}
   </g>;
 }
 
 /** Checkout counter. Higher levels add extra screens on the same counter. */
 export function Counter({ place, kind, level, accent }: { place: Placement; kind: ShopKind; level: number; accent: string }) {
-  const l: Local = { tx: place.x + .075, ty: place.y + .01, rot: 0 };
+  const l: Local = { tx: place.x + (place.rot === 0 ? .075 : .01), ty: place.y + (place.rot === 0 ? .01 : .075), rot: place.rot };
   const right = kind === 'tcg' ? '#ac94cb' : kind === 'it' ? '#8bb0c4' : '#e0b789';
-  const extra = (u: number, w: number) => <g><Cube x={lx(l, u, .39)} y={ly(l, u, .39)} z={1.62} w={w} d={.12} h={.38} top="#536471" left="#354b54" right="#576a71" /><Face l={l} corners={[[u + .04, .52, 1.69], [u + .04 + w, .52, 1.69], [u + .04 + w, .52, 1.96], [u + .04, .52, 1.96]]} fill="#a7d8c6" /></g>;
+  const extra = (u: number, w: number) => <g><Box l={l} u={u} v={.39} z={1.62} w={w} d={.12} h={.38} top="#536471" left="#354b54" right="#576a71" /><Face l={l} corners={[[u + .04, .52, 1.69], [u + .04 + w, .52, 1.69], [u + .04 + w, .52, 1.96], [u + .04, .52, 1.96]]} fill="#a7d8c6" /></g>;
   return <g>
-    <Cube x={lx(l, 0, 0)} y={ly(l, 0, 0)} w={2.85} d={.98} h={1.0} top="#f0e5ef" left={accent} right={right} />
-    <Cube x={lx(l, -.09, -.06)} y={ly(l, -.09, -.06)} z={1.37} w={3.03} d={1.1} h={.12} top="#f7f0f8" left="#e0d3e9" right="#e8ddf0" />
+    <Box l={l} u={0} v={0} w={2.85} d={.98} h={1.0} top="#f0e5ef" left={accent} right={right} />
+    <Box l={l} u={-.09} v={-.06} z={1.37} w={3.03} d={1.1} h={.12} top="#f7f0f8" left="#e0d3e9" right="#e8ddf0" />
     <Face l={l} corners={[[.23, .98, .75], [2.58, .98, .75], [2.58, .98, 1.14], [.23, .98, 1.14]]} fill="#ffffff" opacity={.13} />
-    <Cube x={lx(l, 2.03, .2)} y={ly(l, 2.03, .2)} z={1.5} w={.16} d={.2} h={.25} top="#6b7683" left="#5b6577" right="#85919a" />
-    <Cube x={lx(l, 1.85, .3)} y={ly(l, 1.85, .3)} z={1.66} w={.64} d={.12} h={.46} top="#536471" left="#354b54" right="#576a71" />
+    <Box l={l} u={2.03} v={.2} z={1.5} w={.16} d={.2} h={.25} top="#6b7683" left="#5b6577" right="#85919a" />
+    <Box l={l} u={1.85} v={.3} z={1.66} w={.64} d={.12} h={.46} top="#536471" left="#354b54" right="#576a71" />
     <Face l={l} corners={[[1.9, .43, 1.73], [2.43, .43, 1.73], [2.43, .43, 2.06], [1.9, .43, 2.06]]} fill="#a7d8c6" />
     {level > 1 && extra(1.08, .48)}
     {level > 2 && extra(.37, .43)}
-    <Cube x={lx(l, .33, .26)} y={ly(l, .33, .26)} z={1.49} w={.55} d={.4} h={.18} top="#e3d5a1" left="#c7b884" right="#d8c993" />
+    <Box l={l} u={.33} v={.26} z={1.49} w={.55} d={.4} h={.18} top="#e3d5a1" left="#c7b884" right="#d8c993" />
   </g>;
 }
 

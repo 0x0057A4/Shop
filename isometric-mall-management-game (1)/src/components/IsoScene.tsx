@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
-import type { FurnitureKind, GameState, Placement, Shop, ShopKind } from '../game/data';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { MutableRefObject, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import type { FurnitureKind, GameState, PlaceableKind, Placement, Shop, ShopKind } from '../game/data';
 import { SHOPS, SHOP_ORDER } from '../game/data';
 import type { VisibleGood } from '../game/visualInventory';
 import { createShopDisplay } from '../game/visualInventory';
 import type { Piece } from '../game/layout';
-import { DOOR_TILES, FLOOR_Z, GRID_H, GRID_W, PLACE_LABELS, blockedTiles, footprint, freeSides, piecesOf, placeOf, placementFits, rotatable } from '../game/layout';
+import { DOOR_TILES, FLOOR_Z, GRID_H, GRID_W, PLACE_LABELS, blockedTiles, footprint, freeSides, piecesOf, placeOf, placementFits } from '../game/layout';
+import { ARRANGE_KEYS, PICK_HEIGHT, canRotate, moveTarget, pickBox, pickPiece, rotateTarget } from './Arrange';
 import { serviceQueues } from '../game/services';
 import { PieceView, Plant, Tree } from './ShopPieces';
 import type { StationView } from './ShopPieces';
@@ -31,13 +32,34 @@ function Hotspot({ children, label, onClick }: { children: ReactNode; label: str
 }
 
 /** Extra height of a piece in screen pixels, used for its grab area while arranging. */
-const GRAB_HEIGHT: Record<string, number> = { shelf: 96, workbench: 62, register: 58, showcase: 54, center: 44, materials: 42, decor: 46 };
+interface DragState { id: string; kind: Piece['kind']; from: Placement; place: Placement; startX: number; startY: number; valid: boolean }
 
-interface DragState { id: string; kind: Piece['kind']; from: Placement; place: Placement; grabX: number; grabY: number; valid: boolean }
+/**
+ * How far the pointer moved since it grabbed the piece, converted into tiles.
+ * The two floor axes lean against each other on screen, so a screen step of
+ * (+32, +16) is one tile to the right and one tile towards the viewer.
+ */
+export function dragPlace(from: Placement, start: { x: number; y: number }, point: { x: number; y: number }): Placement {
+  const dux = (point.x - start.x) / 32;
+  const duy = (point.y - start.y) / 16;
+  return { x: from.x + Math.round((dux + duy) / 2), y: from.y + Math.round((duy - dux) / 2), rot: from.rot };
+}
+
+/** What the toolbar outside the scene needs to know about the arrangement. */
+export interface ArrangeInfo { id: string; kind: PlaceableKind; label: string; rot: 0 | 1; canRotate: boolean }
+
+/** Imperative handle for the arrange toolbar. */
+export interface ArrangeApi {
+  rotate: () => void;
+  move: (dx: number, dy: number) => void;
+  select: (id: string) => void;
+  clear: () => void;
+  cancel: () => void;
+}
 
 export interface ServiceHint { id: string; label: string; count: number }
 
-function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy = false, onInteract, onInspect, onMove, selected, preview = false, noGround = false }: {
+function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy = false, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, preview = false, noGround = false }: {
   kind: ShopKind;
   shop: Shop;
   editing?: boolean;
@@ -48,6 +70,8 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
   onInteract?: Interaction;
   onInspect?: (good: VisibleGood) => void;
   onMove?: (id: string, place: Placement) => void;
+  arrangeApi?: MutableRefObject<ArrangeApi | null>;
+  onArrangeInfo?: (info: ArrangeInfo | null) => void;
   selected?: VisibleGood | null;
   preview?: boolean;
   noGround?: boolean;
@@ -66,6 +90,9 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
   const groupRef = useRef<SVGGElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  dragRef.current = drag;
   const walkers = crowd?.walkers ?? [];
   const queuePads = crowd ? serviceQueues(kind, shop, blocked).map(queue => ({ queue, waiting: (crowd.queues[queue.info.id] || []).length })) : [];
   const hintKind = serviceHint ? (serviceHint.id.split('-')[0] as Piece['kind']) : null;
@@ -86,48 +113,17 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     return { good, progress: job ? Math.min(1, job.progress / job.duration) : 0, active: working, working };
   });
 
-  const pointerTile = (event: { clientX: number; clientY: number }) => {
+  /** The pointer position in scene units, the same space the drawings use. */
+  const scenePoint = (event: { clientX: number; clientY: number }) => {
     const node = groupRef.current;
     const matrix = node?.getScreenCTM();
-    if (!node || !matrix) return null;
-    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
-    const ux = (point.x - 390) / 32, uy = (point.y - 146) / 16;
-    return { x: (ux + uy) / 2, y: (uy - ux) / 2 };
-  };
-
-  const startDrag = (piece: Piece, place: Placement) => (event: ReactPointerEvent<SVGGElement>) => {
-    if (!editing || !onMove) return;
-    const point = pointerTile(event);
-    if (!point) return;
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    setFocused(piece.id);
-    setDrag({ id: piece.id, kind: piece.kind, from: place, place, grabX: point.x - place.x, grabY: point.y - place.y, valid: true });
-  };
-  const moveDrag = (event: ReactPointerEvent<SVGGElement>) => {
-    if (!drag) return;
-    const point = pointerTile(event);
-    if (!point) return;
-    const place: Placement = { x: Math.round(point.x - drag.grabX), y: Math.round(point.y - drag.grabY), rot: drag.place.rot };
-    setDrag({ ...drag, place, valid: placementFits(layout, drag.kind, place, drag.id) });
-  };
-  const endDrag = (commit: boolean) => (event: ReactPointerEvent<SVGGElement>) => {
-    if (!drag) return;
-    event.stopPropagation();
-    const target = drag.place;
-    const moved = target.x !== drag.from.x || target.y !== drag.from.y || target.rot !== drag.from.rot;
-    setDrag(null);
-    if (commit && drag.valid && moved) onMove?.(drag.id, target);
-  };
-
-  const shift = (piece: Piece, place: Placement, dx: number, dy: number) => {
-    const target: Placement = { ...place, x: place.x + dx, y: place.y + dy };
-    if (placementFits(layout, piece.kind, target, piece.id)) onMove?.(piece.id, target);
-  };
-  const turn = (piece: Piece, place: Placement) => {
-    if (!rotatable(piece.kind)) return;
-    const target: Placement = { ...place, rot: place.rot === 0 ? 1 : 0 };
-    if (placementFits(layout, piece.kind, target, piece.id)) onMove?.(piece.id, target);
+    if (!node || !matrix || typeof DOMPoint === 'undefined') return null;
+    try {
+      const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
+      return { x: point.x, y: point.y };
+    } catch {
+      return null;
+    }
   };
 
   const hotspotFor = (piece: Piece): { label: string; onClick?: () => void } => {
@@ -143,41 +139,178 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
   const placed = pieces.map(piece => ({ piece, place: placeOf(layout, piece) }));
   const ordered = [...placed].sort((a, b) => (a.place.x + a.place.y) - (b.place.x + b.place.y) || a.piece.index - b.piece.index);
 
+  // ---------------------------------------------------------------- arranging
+  const stateRef = useRef({ placed, ordered, layout, kind, focused, editing, onMove });
+  stateRef.current = { placed, ordered, layout, kind, focused, editing, onMove };
+
+  const focusedPlace = focused ? ordered.find(entry => entry.piece.id === focused) : undefined;
+  const reportRef = useRef<((info: ArrangeInfo | null) => void) | undefined>(onArrangeInfo);
+  reportRef.current = onArrangeInfo;
+  useEffect(() => {
+    if (!editing || !focusedPlace) reportRef.current?.(null);
+    else reportRef.current?.({
+      id: focusedPlace.piece.id,
+      kind: focusedPlace.piece.kind,
+      label: `${PLACE_LABELS[focusedPlace.piece.kind]}${ordered.filter(entry => entry.piece.kind === focusedPlace.piece.kind).length > 1 ? ` ${focusedPlace.piece.index + 1}` : ''}`,
+      rot: focusedPlace.place.rot,
+      canRotate: canRotate(focusedPlace.piece.kind),
+    });
+  }, [editing, focused, focusedPlace?.place.x, focusedPlace?.place.y, focusedPlace?.place.rot]);
+
+  const boxes = ordered.map((entry, depth) => pickBox(entry.piece.id, entry.piece.kind, entry.place, depth));
+  const boxRef = useRef(boxes);
+  boxRef.current = boxes;
+
+  const pointIn = (event: { clientX: number; clientY: number }) => scenePoint(event);
+
+  const beginDrag = (entry: { piece: Piece; place: Placement }, event: { clientX: number; clientY: number }) => {
+    const point = pointIn(event);
+    if (!point) return false;
+    setFocused(entry.piece.id);
+    setDrag({ id: entry.piece.id, kind: entry.piece.kind, from: entry.place, place: entry.place, startX: point.x, startY: point.y, valid: true });
+    return true;
+  };
+
+  /** One pointer handler for the whole shop floor: this is what makes picking reliable. */
+  const scenePointerDown = (event: ReactPointerEvent<SVGGElement>) => {
+    if (!editing) return;
+    const point = pointIn(event);
+    if (!point) return;
+    const hit = pickPiece(point, boxRef.current);
+    event.preventDefault();
+    if (!hit) { setFocused(null); setDrag(null); return; }
+    const entry = stateRef.current.placed.find(candidate => candidate.piece.id === hit.id);
+    if (entry) beginDrag(entry, event);
+  };
+
+  // Dragging is driven by window listeners: pointer capture on an element that
+  // React re-creates used to swallow the release, which left the scene stuck.
+  useEffect(() => {
+    if (!drag) return;
+    const move = (event: PointerEvent) => {
+      const state = stateRef.current;
+      const current = dragRef.current;
+      if (!current) return;
+      const point = scenePoint(event);
+      if (!point) return;
+      const place = dragPlace(current.from, { x: current.startX, y: current.startY }, point);
+      if (place.x === current.place.x && place.y === current.place.y) return;
+      setDrag({ ...current, place, valid: placementFits(state.layout, current.kind, place, current.id) });
+    };
+    const finish = (event: PointerEvent | null) => {
+      const current = dragRef.current;
+      if (!current) return;
+      let place = current.place;
+      if (event) {
+        const point = scenePoint(event);
+        if (point) place = dragPlace(current.from, { x: current.startX, y: current.startY }, point);
+      }
+      const moved = place.x !== current.from.x || place.y !== current.from.y || current.place.rot !== current.from.rot;
+      const fits = placementFits(stateRef.current.layout, current.kind, place, current.id);
+      setDrag(null);
+      dragRef.current = null;
+      if (moved && fits) stateRef.current.onMove?.(current.id, place);
+    };
+    const cancel = () => { setDrag(null); dragRef.current = null; };
+    const up = (event: PointerEvent) => finish(event);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('blur', cancel);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      window.removeEventListener('blur', cancel);
+    };
+  }, [drag !== null]);
+
+  // Leaving the arrange mode never leaves a drag behind.
+  useEffect(() => { if (!editing) { setDrag(null); dragRef.current = null; setFocused(null); } }, [editing]);
+
+  const moveFocused = (dx: number, dy: number) => {
+    const state = stateRef.current;
+    const entry = state.ordered.find(candidate => candidate.piece.id === state.focused);
+    if (!entry) return;
+    const target = moveTarget(state.layout, entry.piece.kind, entry.place, entry.piece.id, dx, dy);
+    if (target) state.onMove?.(entry.piece.id, target);
+    else setNotice('Dort steht schon etwas.');
+  };
+  const rotateFocused = () => {
+    const state = stateRef.current;
+    const entry = state.ordered.find(candidate => candidate.piece.id === state.focused);
+    if (!entry) return;
+    if (!canRotate(entry.piece.kind)) { setNotice('Dieses Möbelstück lässt sich nicht drehen.'); return; }
+    const target = rotateTarget(state.layout, entry.piece.kind, entry.place, entry.piece.id);
+    if (target) state.onMove?.(entry.piece.id, target);
+    else setNotice('Hier ist kein Platz zum Drehen.');
+  };
+  const apiRef = useRef<ArrangeApi | null>(null);
+  const api = useMemo<ArrangeApi>(() => ({
+    rotate: rotateFocused,
+    move: moveFocused,
+    select: id => setFocused(stateRef.current.ordered.some(entry => entry.piece.id === id) ? id : null),
+    clear: () => setFocused(null),
+    cancel: () => { setDrag(null); dragRef.current = null; },
+  }), []);
+  apiRef.current = api;
+  useEffect(() => {
+    if (!arrangeApi) return;
+    arrangeApi.current = editing ? apiRef.current : null;
+    return () => { arrangeApi.current = null; };
+  }, [editing, arrangeApi]);
+
+  // Keys act on the chosen piece, no matter which element has the focus.
+  useEffect(() => {
+    if (!editing) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
+      if (typeof document !== 'undefined' && document.querySelector('[role="dialog"]')) return;
+      if (event.key === 'Escape') { setFocused(null); setDrag(null); dragRef.current = null; return; }
+      if (!stateRef.current.focused) return;
+      if (event.key === 'r' || event.key === 'R') { event.preventDefault(); rotateFocused(); return; }
+      const step = ARRANGE_KEYS[event.key];
+      if (!step) return;
+      event.preventDefault();
+      event.stopPropagation();
+      moveFocused(step[0], step[1]);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editing]);
+
+  useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(null), 2200); return () => window.clearTimeout(timer); }, [notice]);
+
   const pieceNode = (piece: Piece, place: Placement, lifted: boolean) => {
     const { w, d } = footprint(piece.kind, place.rot);
     const corners: [number, number, number][] = [[place.x, place.y, FLOOR_Z], [place.x + w, place.y, FLOOR_Z], [place.x + w, place.y + d, FLOOR_Z], [place.x, place.y + d, FLOOR_Z]];
-    const [x1, y1] = p(place.x, place.y, FLOOR_Z);
-    const [x2, y2] = p(place.x + w, place.y + d, FLOOR_Z);
-    const [x3] = p(place.x + w, place.y, FLOOR_Z);
-    const [x4] = p(place.x, place.y + d, FLOOR_Z);
-    const minX = Math.min(x1, x2, x3, x4), maxX = Math.max(x1, x2, x3, x4);
-    const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
     const hotspot = hotspotFor(piece);
     const isFocused = editing && focused === piece.id;
-    return <Hotspot key={piece.id} label={isFocused ? `${PLACE_LABELS[piece.kind]}: Pfeiltasten verschieben, R drehen.` : hotspot.label} onClick={hotspot.onClick}>
+    const handle = editing && canRotate(piece.kind) ? (() => {
+      const [hx, hy] = p(place.x + w / 2, place.y + d / 2, FLOOR_Z);
+      const top = hy - PICK_HEIGHT[piece.kind] - 4;
+      return <g className={`piece-turn ${isFocused ? 'is-active' : ''}`} role="button" tabIndex={-1} aria-label={`${PLACE_LABELS[piece.kind]} drehen`}
+        onPointerDown={event => { event.stopPropagation(); event.preventDefault(); setFocused(piece.id); }}
+        onClick={event => { event.stopPropagation(); setFocused(piece.id); rotateFocused(); }}>
+        <title>{`${PLACE_LABELS[piece.kind]} drehen`}</title>
+        <circle cx={hx} cy={top} r={11} className="piece-turn-dot" />
+        <path d={`M${hx - 4.6} ${top + 1.4}a4.6 4.6 0 1 1 2.6 4.1`} className="piece-turn-arrow" />
+        <path d={`M${hx - 5.8} ${top - 2.6}l1.4 4 4-1.2`} className="piece-turn-arrow" />
+      </g>;
+    })() : null;
+    return <Hotspot key={piece.id} label={isFocused ? `${PLACE_LABELS[piece.kind]}: Pfeiltasten verschieben, R dreht.` : hotspot.label} onClick={hotspot.onClick}>
       <g
         className={`shop-piece ${editing ? 'is-editing' : ''} ${lifted ? 'is-dragging' : ''} ${isFocused ? 'is-focused' : ''}`}
-        onPointerDown={editing ? startDrag(piece, place) : undefined}
-        onPointerMove={editing ? moveDrag : undefined}
-        onPointerUp={editing ? endDrag(true) : undefined}
-        onPointerCancel={editing ? endDrag(false) : undefined}
         onFocus={editing ? () => setFocused(piece.id) : undefined}
         tabIndex={editing ? 0 : undefined}
         role={editing ? 'button' : undefined}
-        aria-label={editing ? `${PLACE_LABELS[piece.kind]} verschieben. Pfeiltasten bewegen, R dreht.` : undefined}
-        onKeyDown={editing ? event => {
-          const moves: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowRight: [0, -1], ArrowDown: [1, 0], ArrowLeft: [0, 1] };
-          if (event.key === 'r' || event.key === 'R') { event.preventDefault(); event.stopPropagation(); turn(piece, place); return; }
-          const step = moves[event.key];
-          if (!step) return;
-          event.preventDefault(); event.stopPropagation();
-          shift(piece, place, step[0], step[1]);
-        } : undefined}
+        aria-label={editing ? `${PLACE_LABELS[piece.kind]} verschieben. Anklicken und ziehen, Pfeiltasten bewegen, R dreht.` : undefined}
       >
         <PieceView piece={piece} place={place} shopKind={kind} shop={shop} display={display} stations={stations} selected={editing ? null : selected ?? null} onInspect={editing ? undefined : onInspect} />
-        {editing && <rect x={minX} y={minY - (GRAB_HEIGHT[piece.kind] ?? 70)} width={maxX - minX} height={maxY - minY + (GRAB_HEIGHT[piece.kind] ?? 70)} fill="transparent" pointerEvents="all" onClick={event => { event.stopPropagation(); event.preventDefault(); }} />}
         {isFocused && !lifted && <polygon points={polygon(corners.map(([x, y, z]) => [x, y, z + .012] as [number, number, number]))} className="piece-marker" pointerEvents="none" />}
       </g>
+      {handle}
     </Hotspot>;
   };
 
@@ -194,7 +327,7 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     staffSpots.push(best ? [best.x + .5, best.y + .5] : [center.x, center.y]);
   }
 
-  return <g ref={groupRef}>
+  return <g ref={groupRef} className="shop-root" onPointerDown={editing ? scenePointerDown : undefined}>
     {!noGround && <g>
       <polygon points={polygon([[-1.5,-1.35,-.2],[11.8,-1.35,-.2],[11.8,10.1,-.2],[-1.5,10.1,-.2]])} fill="#829e8a" opacity=".09" transform="translate(4 12)" />
       <Cube x={-1.5} y={-1.35} z={-.18} w={13.3} d={11.45} h={.22} top="#dce8de" left="#bed0c2" right="#c6d7ca" />
@@ -247,8 +380,12 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
         </g>;
       })()}
     </g>}
-    {ordered.filter(entry => entry.piece.id !== drag?.id).map(entry => pieceNode(entry.piece, entry.place, false))}
-    {drag && (() => { const entry = placed.find(candidate => candidate.piece.id === drag.id); return entry ? pieceNode(entry.piece, drag.place, true) : null; })()}
+    {(() => {
+      // One list keeps the DOM nodes of the pieces alive while dragging; the
+      // dragged piece is simply drawn last so it lies on top.
+      const list = drag ? [...ordered.filter(entry => entry.piece.id !== drag.id), ...ordered.filter(entry => entry.piece.id === drag.id)] : ordered;
+      return list.map(entry => pieceNode(entry.piece, drag?.id === entry.piece.id ? drag.place : entry.place, drag?.id === entry.piece.id));
+    })()}
     {staffSpots.map(([x, y], index) => <Person key={`staff-${index}`} x={x} y={y} color={index === 0 ? '#96aabe' : '#b5a0c5'} staff />)}
     {showCustomers && <CustomerGroup walkers={walkers} />}
     {player && <PlayerAvatar player={player} busy={busy} />}
@@ -267,6 +404,14 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
       <rect x="-13" y="-5" width="26" height="11" rx="1.6" fill={shop.open ? '#5c9474' : '#b38b79'} stroke="#f8f8eb" strokeWidth="1.2" />
       <text x="0" y="2.5" textAnchor="middle" fill="#fffdf3" fontSize="6.2" fontWeight="800" letterSpacing=".4">{shop.open ? 'OFFEN' : 'ZU'}</text>
     </g>
+    {editing && notice && (() => {
+      const [bx, by] = p(4.5, 4.5, 2.6);
+      const width = Math.max(150, notice.length * 7.4 + 34);
+      return <g className="arrange-note-tip" pointerEvents="none">
+        <rect x={bx - width / 2} y={by - 16} width={width} height={26} rx={13} />
+        <text x={bx} y={by + 2} textAnchor="middle">{notice}</text>
+      </g>;
+    })()}
     {!noGround && <g>
       <Cube x={6.88} y={7.25} z={.06} w={2.16} d={.48} h={.15} top="#e4dce9" left="#cbc2d3" right="#d5cdda" />
       <Cube x={6.88} y={7.73} z={.05} w={2.16} d={.35} h={.07} top="#e8e1eb" left="#d0c8d7" right="#d8d1de" />
@@ -289,7 +434,7 @@ function EmptyPlot({ x, y, label, onClick }: { x: number; y: number; label: stri
   </g>;
 }
 
-export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null, player = null, serviceHint = null, busy = false, onInteract, onInspect, onMove, selected, onSelect }: {
+export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null, player = null, serviceHint = null, busy = false, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, onSelect }: {
   game: GameState;
   kind: ShopKind;
   mode: 'shop' | 'mall';
@@ -302,6 +447,10 @@ export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null
   onInteract: Interaction;
   onInspect: (good: VisibleGood) => void;
   onMove?: (id: string, place: Placement) => void;
+  /** Imperative handle used by the arrange toolbar next to the scene. */
+  arrangeApi?: MutableRefObject<ArrangeApi | null>;
+  /** Reports which piece is currently chosen, for that toolbar. */
+  onArrangeInfo?: (info: ArrangeInfo | null) => void;
   selected: VisibleGood | null;
   onSelect: (kind: ShopKind) => void;
 }) {
@@ -315,7 +464,7 @@ export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null
     <defs><filter id="scene-shadow" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="12" stdDeviation="8" floodColor="#809c89" floodOpacity=".12" /></filter></defs>
     <g transform={`translate(430 250) scale(${zoom}) translate(-430 -250)`}>
       {mode === 'shop'
-        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} crowd={crowd} player={player} serviceHint={serviceHint} busy={busy} onInteract={onInteract} onInspect={onInspect} onMove={onMove} selected={selected} preview={!game.hasChosen} /></g>
+        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} crowd={crowd} player={player} serviceHint={serviceHint} busy={busy} onInteract={onInteract} onInspect={onInspect} onMove={onMove} arrangeApi={arrangeApi} onArrangeInfo={onArrangeInfo} selected={selected} preview={!game.hasChosen} /></g>
         : <g>
           <polygon points="35,216 443,12 817,202 410,422" fill="#e1eae0" />
           <path d="M160 275L550 80M250 330L654 128M330 180L653 341" stroke="#eeeee8" strokeWidth="36" />

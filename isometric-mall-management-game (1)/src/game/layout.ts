@@ -12,7 +12,11 @@ export const DOOR_TILES: Tile[] = [{ x: 7, y: 6 }, { x: 8, y: 6 }];
 
 export const PLACEABLE_ORDER: PlaceableKind[] = ['showcase', 'center', 'materials', 'register', 'shelf', 'workbench', 'decor'];
 export const SINGLETONS: PlaceableKind[] = ['showcase', 'center', 'materials', 'register'];
-export const ROTATABLE: PlaceableKind[] = ['shelf', 'workbench', 'materials'];
+/**
+ * Everything with a rectangular footprint can be turned by 90 degrees; only the
+ * square decor tile looks the same in both directions.
+ */
+export const ROTATABLE: PlaceableKind[] = ['showcase', 'center', 'materials', 'register', 'shelf', 'workbench'];
 
 export const FOOTPRINTS: Record<PlaceableKind, { w: number; d: number }> = {
   showcase: { w: 3, d: 1 },
