@@ -3,7 +3,7 @@ import type * as React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { GameState, Page, Placement, ShopKind } from '../game/data';
 import { clock, getItem, money, money2, RARITY_LABELS, SHOPS, SHOP_ORDER } from '../game/data';
-import { capacity, checkout, goalProgress, movePlaceable, skipCustomer as skipCustomerAction, stockCount } from '../game/engine';
+import { AUTO_SERVE_MS, AUTO_SERVE_TIP_CHANCE, capacity, checkout, expandShop, goalProgress, hasRole, movePlaceable, nextExpansion, skipCustomer as skipCustomerAction, stockCount } from '../game/engine';
 import type { VisibleGood } from '../game/visualInventory';
 import { createShopDisplay, displayedQuantity } from '../game/visualInventory';
 import { Brand, Icon, Modal, Progress, ShopIcon } from './Ui';
@@ -52,6 +52,7 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
   const display=createShopDisplay(kind,shop);
   const [serving,setServing]=useState<{serviceId:string;customer:QueueCustomer}|null>(null);
   const [arrangeInfo,setArrangeInfo]=useState<ArrangeInfo|null>(null);
+  const servingRef=useRef<typeof serving>(null);
   const arrangeApi=useRef<ArrangeApi|null>(null);
   const displayed=[...display.showcase,...display.center,...display.shelves.flat()];
   const crowdActive=mode === 'shop' && game.hasChosen && shop.open && displayed.length > 0;
@@ -121,6 +122,34 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
     nextCustomer(serving.serviceId);
   };
   const item=selected?.type === 'item' ? getItem(kind,selected.id) : undefined;
+  // Staff on the till keeps the queue moving, even while you walk around. The
+  // current game, crowd and update callback are read from a ref, because the
+  // shop re-renders every second while the game clock runs: the timer has to
+  // survive those renders instead of being restarted all the time.
+  const hasCashier=hasRole(shop,'register');
+  const tillRef=useRef({kind,readGame,update,crowd});
+  tillRef.current={kind,readGame,update,crowd};
+  useEffect(()=>{
+    if(!hasCashier || mode !== 'shop' || !game.hasChosen || game.paused || !shop.open) return;
+    const timer=window.setInterval(()=>{
+      if(servingRef.current) return;
+      const {kind:shopKind,readGame:read,update:apply,crowd:people}=tillRef.current;
+      const current=read();
+      const currentShop=current.shops[shopKind];
+      const till=serviceQueues(shopKind,currentShop,blockedTiles(currentShop.layout)).find(entry=>entry.info.kind === 'register');
+      if(!till) return;
+      const customer=people.frontAt(till.info.id,till.spots[0]);
+      if(!customer) return;
+      const result=checkout(current,shopKind,customer,Math.random() < AUTO_SERVE_TIP_CHANCE);
+      apply(()=>result.game);
+      people.finish(till.info.id);
+    },AUTO_SERVE_MS);
+    return()=>window.clearInterval(timer);
+  },[hasCashier,mode,game.hasChosen,game.paused,shop.open]);
+  servingRef.current=serving;
+  const waitingServices=services
+    .map(entry=>({ info:entry.info, waiting:crowd.waiting(entry.info.id), total:crowd.front(entry.info.id)?.total ?? 0 }))
+    .filter(entry=>entry.waiting > 0);
   const card=selected?.type === 'card' ? shop.cards.find(entry=>entry.id === selected.id) : undefined;
   const quantity=item ? shop.stock[item.id] || 0 : card && !card.sold ? 1 : 0;
   const name=item?.name ?? card?.name ?? (selected?.type === 'card' ? selected.name : '');
@@ -133,8 +162,20 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
   };
   const fullScreen=async()=>{try{if(document.fullscreenElement) await document.exitFullscreen();else await ref.current?.requestFullscreen();}catch{notify('Die Vollbildansicht wird von diesem Browser nicht unterstützt.');}};
   return <div className="world-panel" ref={ref}><div className="world-heading"><button className="world-shop-selector" onClick={()=>onModal('shops')}><span className="world-shop-icon" style={{backgroundColor:SHOPS[kind].light,color:SHOPS[kind].color}}><ShopIcon kind={kind} size={22}/></span><span><strong>{shop.name}</strong><small>{SHOPS[kind].label} <span>·</span> {game.hasChosen ? 'Dein Laden' : 'Deine erste Geschichte'}</small></span><Icon name="down" size={15}/></button><div className="world-heading-actions"><button className={`button secondary small world-browse ${browse ? 'active' : ''}`} disabled={mode==='mall'} aria-label={browse ? 'Warenübersicht schliessen' : 'Warenübersicht öffnen'} title="Warenübersicht" aria-expanded={browse} onClick={()=>setBrowse(open=>!open)}><Icon name="eye" size={15}/>Waren</button><button className="button secondary small world-furnish" disabled={!game.hasChosen} onClick={()=>onNavigate('furnishing')}><Icon name="pencil" size={14}/>Einrichten</button></div></div>
-    <div className="world-stage"><div className="world-stage-toolbar"><div className="world-view-tabs"><button className={mode === 'shop' ? 'active' : ''} onClick={()=>{setMode('shop');setZoom(1);}}><Icon name="store" size={14}/>Ladenansicht</button><button className={mode === 'mall' ? 'active' : ''} onClick={()=>{setMode('mall');setZoom(1);}}><Icon name="grid" size={14}/>Meine Mall</button></div><div className="world-stage-right"><button className={`button secondary small world-serve ${employeeInReach ? 'is-ready' : ''}`} disabled={!nearby || !employeeInReach} title={nearby ? `Mit E bedienen (${nearby.info.label})` : 'Geh mit WASD oder den Pfeiltasten zu einer Kasse oder Dienstleistung'} onClick={openRegister}><Icon name="register" size={14}/>Bedienen{waiting > 0 && <span className="serve-badge">{waiting}</span>}{employeeInReach && <kbd>E</kbd>}</button><button className={`button secondary small world-arrange ${editLayout ? 'active' : ''}`} disabled={!game.hasChosen || mode === 'mall'} aria-pressed={editLayout} title="Möbel auf den Kacheln verschieben" onClick={()=>{if(mode !== 'shop')setMode('shop');onEditLayout(!editLayout);}}><Icon name={editLayout ? 'check' : 'move'} size={14}/>{editLayout ? 'Fertig' : 'Anordnen'}</button><span className={`world-live ${game.paused ? 'is-paused' : ''}`}><i/>{!game.hasChosen ? 'VORSCHAU' : game.paused ? 'PAUSIERT' : 'DEINE MALL LEBT'}</span></div></div>
+    <div className="world-stage"><div className="world-stage-toolbar"><div className="world-view-tabs"><button className={mode === 'shop' ? 'active' : ''} onClick={()=>{setMode('shop');setZoom(1);}}><Icon name="store" size={14}/>Ladenansicht</button><button className={mode === 'mall' ? 'active' : ''} onClick={()=>{setMode('mall');setZoom(1);}}><Icon name="grid" size={14}/>Meine Mall</button></div><div className="world-stage-right"><button className={`button secondary small world-serve ${employeeInReach ? 'is-ready' : ''}`} disabled={!nearby || !employeeInReach} title={nearby ? `Mit E bedienen (${nearby.info.label})` : 'Geh mit WASD oder den Pfeiltasten zu einer Kasse oder Dienstleistung'} onClick={openRegister}><Icon name="register" size={14}/>Bedienen{waiting > 0 && <span className="serve-badge">{waiting}</span>}{employeeInReach && <kbd>E</kbd>}</button><button className="button secondary small world-expand" disabled={mode === 'mall' || !nextExpansion(shop) || game.coins < (nextExpansion(shop)?.cost ?? 0)} title={nextExpansion(shop) ? `Verkaufsfläche erweitern: ${nextExpansion(shop)!.label} für ${money2(nextExpansion(shop)!.cost)}` : 'Deine Verkaufsfläche ist voll ausgebaut'} onClick={()=>{if(mode !== 'shop')setMode('shop');update(g=>expandShop(g,kind),'Deine Verkaufsfläche ist gewachsen!');}}><Icon name="expand" size={14}/>Erweitern</button><button className={`button secondary small world-arrange ${editLayout ? 'active' : ''}`} disabled={!game.hasChosen || mode === 'mall'} aria-pressed={editLayout} title="Möbel auf den Kacheln verschieben" onClick={()=>{if(mode !== 'shop')setMode('shop');onEditLayout(!editLayout);}}><Icon name={editLayout ? 'check' : 'move'} size={14}/>{editLayout ? 'Fertig' : 'Anordnen'}</button><span className={`world-live ${game.paused ? 'is-paused' : ''}`}><i/>{!game.hasChosen ? 'VORSCHAU' : game.paused ? 'PAUSIERT' : 'DEINE MALL LEBT'}</span></div></div>
       <IsoScene game={game} kind={kind} mode={mode} zoom={zoom} editing={editLayout && mode === 'shop'} arrangeApi={arrangeApi} onArrangeInfo={setArrangeInfo} crowd={mode === 'shop' ? crowd.state : null} player={mode === 'shop' && game.hasChosen ? player : null} serviceHint={editLayout ? null : serveHint} busy={!!serving} onInteract={interact} onInspect={setSelected} onMove={(id:string,place:Placement)=>update(g=>movePlaceable(g,kind,id,place))} selected={selected} onSelect={k=>{if(game.hasChosen)update(g=>({...g,selected:k}));setMode('shop');setZoom(1);}}/>
+      {mode === 'shop' && game.hasChosen && waitingServices.length > 0 && <div className="queue-panel" role="status" aria-live="polite">
+        <span className="queue-panel-head"><Icon name="bell" size={14}/>Wartende Kundschaft</span>
+        {waitingServices.map(entry=><div className={`queue-panel-row ${entry.info.id === nearby?.info.id ? 'is-near' : ''}`} key={entry.info.id}>
+          <span className="queue-dot" aria-hidden="true"/>
+          <span className="queue-panel-label">{entry.info.label}</span>
+          <strong>{entry.waiting}</strong>
+          {entry.total > 0 && <small>{money2(entry.total)}</small>}
+          {entry.info.id === nearby?.info.id && employeeInReach
+            ? <button type="button" className="queue-serve" onClick={openRegister}>Bedienen <kbd>E</kbd></button>
+            : <span className="queue-hint">{entry.info.id === nearby?.info.id ? 'wartet auf dich' : 'geh dorthin'}</span>}
+        </div>)}
+      </div>}
       <span className="scene-hint"><Icon name={editLayout ? 'move' : 'eye'} size={14}/>{editLayout ? arrangeInfo ? `${arrangeInfo.label}: ziehen oder Pfeiltasten bewegen${arrangeInfo.canRotate ? ', R dreht' : ''}.` : 'Möbel anklicken und ziehen – Pfeiltasten bewegen, R dreht.' : mode === 'shop' ? game.hasChosen ? 'Du bist die grüne Figur: WASD oder Pfeiltasten laufen, E bedient die Schlange an der Kasse.' : 'Ware anklicken: Produkt und echten Bestand ansehen.' : 'Wähle einen Laden oder eröffne eine neue Fläche.'}</span>
       {editLayout && mode === 'shop' && <div className="layout-editor-bar">
         <Icon name="move" size={15}/>

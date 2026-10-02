@@ -1,5 +1,21 @@
 import { SHOPS } from './data';
-import type { Shop, ShopKind, TradingCard } from './data';
+import type { Shop, ShelfTier, ShopKind, TradingCard } from './data';
+
+/** Visible goods per shelf, depending on how big the shelf is. */
+export const SHELF_SLOTS: Record<ShelfTier, number> = { 1: 4, 2: 9 };
+/** Slots a shelf has on display: rows × columns of the model. */
+export const SHELF_SHAPE: Record<ShelfTier, { rows: number; columns: number; height: number }> = {
+  1: { rows: 2, columns: 2, height: 1.28 },
+  2: { rows: 3, columns: 3, height: 2.15 },
+};
+const REFILL_STACK = 2;
+/** Units per slot: two when somebody is on shelf duty, otherwise one. */
+export const refillStack = (shop: Shop) => (isRefilled(shop) ? REFILL_STACK : 1);
+
+/** How big the shelf at this position is drawn. */
+export const shelfTierOf = (shop: Shop, index: number): ShelfTier => (shop.shelfTiers?.[index] === 2 ? 2 : 1);
+/** Whether a staff member keeps the shelves stacked. */
+export const isRefilled = (shop: Shop) => (shop.staffRoles || []).includes('refill');
 
 export type VisibleGood =
   | { type: 'item'; id: string }
@@ -39,6 +55,11 @@ export function createShopDisplay(kind: ShopKind, shop: Shop): ShopDisplay {
     ? shop.cards.filter(card => card.listed && !card.sold).sort((a, b) => b.value - a.value)
     : [];
 
+  /**
+   * Fills the display slots from the warehouse, one real item per drawn unit.
+   * The units of one slot always sit next to each other in the list: a slot can
+   * hold a small stack when somebody on shelf duty keeps the shelves full.
+   */
   function take(order: string[], count: number): VisibleGood[] {
     const units: VisibleGood[] = [];
     while (units.length < count && order.some(id => remaining[id] > 0)) {
@@ -69,8 +90,9 @@ export function createShopDisplay(kind: ShopKind, shop: Shop): ShopDisplay {
   const shelves = Array.from({ length: shop.furniture.shelf }, (_, index) => {
     const order = preferred[kind].shelf;
     const rotated = [...order.slice(index % order.length), ...order.slice(0, index % order.length)];
-    const units = take(rotated, 9);
-    units.push(...takeCards(9 - units.length));
+    const slots = SHELF_SLOTS[shelfTierOf(shop, index)];
+    const units = take(rotated, slots * refillStack(shop));
+    units.push(...takeCards(slots * refillStack(shop) - units.length));
     return units;
   });
 

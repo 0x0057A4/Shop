@@ -5,9 +5,10 @@ import { SHOPS, SHOP_ORDER } from '../game/data';
 import type { VisibleGood } from '../game/visualInventory';
 import { createShopDisplay } from '../game/visualInventory';
 import type { Piece } from '../game/layout';
-import { DOOR_TILES, FLOOR_Z, GRID_H, GRID_W, PLACE_LABELS, blockedTiles, footprint, freeSides, piecesOf, placeOf, placementFits } from '../game/layout';
+import { DOOR_TILES, FLOOR_Z, PLACE_LABELS, blockedTiles, footprint, freeSides, gridOf, piecesOf, placeOf, placementFits } from '../game/layout';
 import { ARRANGE_KEYS, PICK_HEIGHT, canRotate, moveTarget, pickBox, pickPiece, rotateTarget } from './Arrange';
 import { serviceQueues } from '../game/services';
+import { staffRole } from '../game/engine';
 import { PieceView, Plant, Tree } from './ShopPieces';
 import type { StationView } from './ShopPieces';
 import { CustomerGroup, Person } from './Customers';
@@ -85,6 +86,11 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
   const displayed = [...display.showcase, ...display.center, ...display.shelves.flat()];
   const showCustomers = preview || (shop.open && displayed.length > 0);
   const layout = shop.layout;
+  const grid = gridOf(shop);
+  /** The sales floor can be enlarged, so nothing here may assume 9 × 7 tiles. */
+  const roomW = Math.max(grid.w, 9);
+  const roomD = Math.max(grid.h, 7);
+  const grow = roomW - 9;
   const pieces = piecesOf(shop);
   const blocked = blockedTiles(layout);
   const groupRef = useRef<SVGGElement>(null);
@@ -195,7 +201,7 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
       if (!point) return;
       const place = dragPlace(current.from, { x: current.startX, y: current.startY }, point);
       if (place.x === current.place.x && place.y === current.place.y) return;
-      setDrag({ ...current, place, valid: placementFits(state.layout, current.kind, place, current.id) });
+      setDrag({ ...current, place, valid: placementFits(state.layout, current.kind, place, current.id, grid) });
     };
     const finish = (event: PointerEvent | null) => {
       const current = dragRef.current;
@@ -206,7 +212,7 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
         if (point) place = dragPlace(current.from, { x: current.startX, y: current.startY }, point);
       }
       const moved = place.x !== current.from.x || place.y !== current.from.y || current.place.rot !== current.from.rot;
-      const fits = placementFits(stateRef.current.layout, current.kind, place, current.id);
+      const fits = placementFits(stateRef.current.layout, current.kind, place, current.id, grid);
       setDrag(null);
       dragRef.current = null;
       if (moved && fits) stateRef.current.onMove?.(current.id, place);
@@ -232,7 +238,7 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     const state = stateRef.current;
     const entry = state.ordered.find(candidate => candidate.piece.id === state.focused);
     if (!entry) return;
-    const target = moveTarget(state.layout, entry.piece.kind, entry.place, entry.piece.id, dx, dy);
+    const target = moveTarget(state.layout, entry.piece.kind, entry.place, entry.piece.id, dx, dy, grid);
     if (target) state.onMove?.(entry.piece.id, target);
     else setNotice('Dort steht schon etwas.');
   };
@@ -241,7 +247,7 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     const entry = state.ordered.find(candidate => candidate.piece.id === state.focused);
     if (!entry) return;
     if (!canRotate(entry.piece.kind)) { setNotice('Dieses Möbelstück lässt sich nicht drehen.'); return; }
-    const target = rotateTarget(state.layout, entry.piece.kind, entry.place, entry.piece.id);
+    const target = rotateTarget(state.layout, entry.piece.kind, entry.place, entry.piece.id, grid);
     if (target) state.onMove?.(entry.piece.id, target);
     else setNotice('Hier ist kein Platz zum Drehen.');
   };
@@ -314,40 +320,55 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     </Hotspot>;
   };
 
+  // Everybody works where their task is: at the till, at the material shelf or
+  // between the shelves they keep filled.
   const staffSpots: [number, number][] = [];
-  const staffPiece = (index: number) => index === 0 ? pieces.find(piece => piece.kind === 'register') : pieces.find(piece => piece.kind === 'workbench' && piece.index === index);
-  for (let index = 0; index < shop.staff; index++) {
-    const piece = staffPiece(index);
-    if (!piece) { staffSpots.push([3.13, 5.08]); continue; }
+  const spotFor = (piece: Piece | undefined, fallback: [number, number]): [number, number] => {
+    if (!piece) return fallback;
     const place = placeOf(layout, piece);
     const size = footprint(piece.kind, place.rot);
     const center = { x: place.x + size.w / 2, y: place.y + size.d / 2 };
     const sides = freeSides(place, piece.kind, blocked);
     const best = sides.sort((a, b) => (a.x + a.y) - (b.x + b.y)).find(tile => tile.x + tile.y >= center.x + center.y - .5) || sides[0];
-    staffSpots.push(best ? [best.x + .5, best.y + .5] : [center.x, center.y]);
+    return best ? [best.x + .5, best.y + .5] : [center.x, center.y];
+  };
+  const staffWorkplace = (index: number): Piece | undefined => {
+    const role = staffRole(shop, index);
+    if (role === 'register') return pieces.find(piece => piece.kind === 'register');
+    if (role === 'stock') return pieces.find(piece => piece.kind === 'materials');
+    return pieces.find(piece => piece.kind === 'shelf' && piece.index === index % Math.max(1, shop.furniture.shelf))
+      || pieces.find(piece => piece.kind === 'workbench');
+  };
+  for (let index = 0; index < shop.staff; index++) {
+    staffSpots.push(spotFor(staffWorkplace(index), [3.13, 5.08]));
   }
 
   return <g ref={groupRef} className="shop-root" onPointerDown={editing ? scenePointerDown : undefined}>
     {!noGround && <g>
       <polygon points={polygon([[-1.5,-1.35,-.2],[11.8,-1.35,-.2],[11.8,10.1,-.2],[-1.5,10.1,-.2]])} fill="#829e8a" opacity=".09" transform="translate(4 12)" />
       <Cube x={-1.5} y={-1.35} z={-.18} w={13.3} d={11.45} h={.22} top="#dce8de" left="#bed0c2" right="#c6d7ca" />
-      <polygon points={polygon([[9.45,-1.3,.055],[11.75,-1.3,.055],[11.75,10,.055],[9.45,10,.055]])} fill="#ebeae5" />
-      <polygon points={polygon([[-1.45,7.7,.056],[9.5,7.7,.056],[9.5,10,.056],[-1.45,10,.056]])} fill="#ebeae5" />
-      {Array.from({length: 13},(_,i) => <polyline key={`p${i}`} points={pts([p(-1.45+i,7.7,.061),p(-1.45+i,10,.061)])} stroke="#dcded7" strokeWidth=".8" fill="none" />)}
-      {Array.from({length: 12},(_,i) => <polyline key={`q${i}`} points={pts([p(9.45,-1.3+i,.061),p(11.75,-1.3+i,.061)])} stroke="#dcded7" strokeWidth=".8" fill="none" />)}
+      <polygon points={polygon([[9.45 + grow,-1.3,.055],[11.75 + grow,-1.3,.055],[11.75 + grow,10,.055],[9.45 + grow,10,.055]])} fill="#ebeae5" />
+      <polygon points={polygon([[-1.45,7.7,.056],[9.5 + grow,7.7,.056],[9.5 + grow,10,.056],[-1.45,10,.056]])} fill="#ebeae5" />
+      {Array.from({length: 13 + grow},(_,i) => <polyline key={`p${i}`} points={pts([p(-1.45+i,7.7,.061),p(-1.45+i,10,.061)])} stroke="#dcded7" strokeWidth=".8" fill="none" />)}
+      {Array.from({length: 12},(_,i) => <polyline key={`q${i}`} points={pts([p(9.45 + grow,-1.3+i,.061),p(11.75 + grow,-1.3+i,.061)])} stroke="#dcded7" strokeWidth=".8" fill="none" />)}
       <Tree x={-.78} y={1.2} />
-      <Tree x={9.8} y={-.35} />
+      <Tree x={9.8 + grow} y={-.35} />
     </g>}
-    <Cube x={-.2} y={-.2} z={.06} w={9.4} d={7.4} h={.3} top={tcg ? '#eae5ef' : it ? '#e4edf0' : '#f0e9dc'} left="#c2b7cd" right="#d0c6d8" />
-    {Array.from({length:9},(_,x) => Array.from({length:7},(_,y) => <polygon key={`tile-${x}-${y}`} points={polygon([[x,y,.37],[x+.99,y,.37],[x+.99,y+.99,.37],[x,y+.99,.37]])} fill={(tcg ? ['#eee8f1','#f6f1f6'] : it ? ['#e9f0f2','#f4f8f7'] : ['#f2ebdf','#faf5ec'])[(x+y)%2]} stroke={tcg ? '#eee8f1' : it ? '#e9f0f2' : '#f2ebdf'} strokeWidth=".5" />))}
+    <Cube x={-.2} y={-.2} z={.06} w={grow + 9.4} d={7.4} h={.3} top={tcg ? '#eae5ef' : it ? '#e4edf0' : '#f0e9dc'} left="#c2b7cd" right="#d0c6d8" />
+    {Array.from({length: roomW},(_,x) => Array.from({length: roomD},(_,y) => <polygon key={`tile-${x}-${y}`} points={polygon([[x,y,.37],[x+.99,y,.37],[x+.99,y+.99,.37],[x,y+.99,.37]])} fill={(tcg ? ['#eee8f1','#f6f1f6'] : it ? ['#e9f0f2','#f4f8f7'] : ['#f2ebdf','#faf5ec'])[(x+y)%2]} stroke={tcg ? '#eee8f1' : it ? '#e9f0f2' : '#f2ebdf'} strokeWidth=".5" />))}
     {editing && <g className="layout-grid" pointerEvents="none">
-      {Array.from({ length: GRID_W + 1 }, (_, i) => <polyline key={`v${i}`} points={pts([p(i, 0, .378), p(i, GRID_H, .378)])} />)}
-      {Array.from({ length: GRID_H + 1 }, (_, i) => <polyline key={`h${i}`} points={pts([p(0, i, .378), p(GRID_W, i, .378)])} />)}
+      {Array.from({ length: roomW + 1 }, (_, i) => <polyline key={`v${i}`} points={pts([p(i, 0, .378), p(i, roomD, .378)])} />)}
+      {Array.from({ length: roomD + 1 }, (_, i) => <polyline key={`h${i}`} points={pts([p(0, i, .378), p(roomW, i, .378)])} />)}
       {DOOR_TILES.map(tile => <polygon key={`door-${tile.x}-${tile.y}`} points={polygon([[tile.x,tile.y,.379],[tile.x+1,tile.y,.379],[tile.x+1,tile.y+1,.379],[tile.x,tile.y+1,.379]] as [number, number, number][])} className="layout-door" />)}
     </g>}
     {editing && drag && <polygon points={polygon(([[drag.place.x, drag.place.y, FLOOR_Z + .02], [drag.place.x + footprint(drag.kind, drag.place.rot).w, drag.place.y, FLOOR_Z + .02], [drag.place.x + footprint(drag.kind, drag.place.rot).w, drag.place.y + footprint(drag.kind, drag.place.rot).d, FLOOR_Z + .02], [drag.place.x, drag.place.y + footprint(drag.kind, drag.place.rot).d, FLOOR_Z + .02]] as [number, number, number][]))} className={`layout-ghost ${drag.valid ? 'valid' : 'invalid'}`} pointerEvents="none" />}
-    <Cube x={0} y={-.22} w={9.12} d={.22} h={3.5} top="#e0d6ee" left={wall2} right={wall} />
+    <Cube x={0} y={-.22} w={grow + 9.12} d={.22} h={3.5} top="#e0d6ee" left={wall2} right={wall} />
     <Cube x={-.22} y={0} w={.22} d={6.9} h={3.5} top="#dfd5eb" left={wall} right={wall} />
+    {grow > 0 && <g>
+      <Cube x={8.78} y={7} w={grow + .22} d={.2} h={.75} top="#d4c3e1" left={tcg ? '#b59cce' : it ? '#9fbecf' : '#d2aa83'} right="#c5b0d9" />
+      <polygon points={polygon([[8.98, 7.06, .78], [8.98, 7.06, 2.5], [8.94 + grow, 7.06, 2.5], [8.94 + grow, 7.06, .78]])} fill="#e6f0f1" opacity=".3" />
+      <polyline points={pts([p(8.98, 7.06, .78), p(8.98, 7.06, 2.5), p(8.94 + grow, 7.06, 2.5), p(8.94 + grow, 7.06, .78)])} fill="none" stroke="#f9f8f6" strokeWidth="2.4" />
+    </g>}
     <polygon points={polygon([[.012,2.2,1.3],[.012,3.85,1.3],[.012,3.85,3.2],[.012,2.2,3.2]])} fill="#e6f0f1" stroke="#f9f8f6" strokeWidth="4" />
     <polyline points={pts([p(.016,3.02,1.3),p(.016,3.02,3.2)])} stroke="#fff" strokeWidth="3" />
     <polyline points={pts([p(.016,2.2,2.3),p(.016,3.85,2.3)])} stroke="#fff" strokeWidth="3" />
@@ -393,7 +414,7 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     <g transform={`translate(${p(1.15,7.24,.8).join(',')}) rotate(26.565)`}>
       <text fill="#fffdfd" fontSize="12" fontWeight="800" letterSpacing="1.4">{shop.name.toUpperCase()}</text>
     </g>
-    <Cube x={9} y={0} w={.23} d={7} h={.36} top="#ddd1e8" left="#c2b0d5" right="#c5b5d6" />
+    <Cube x={roomW} y={0} w={.23} d={7} h={.36} top="#ddd1e8" left="#c2b0d5" right="#c5b5d6" />
     <Cube x={6.85} y={7} w={.22} d={.3} h={2.3} top="#e8dcef" left="#cdbade" right="#d9c9e7" />
     <Cube x={8.78} y={7} w={.22} d={.3} h={2.3} top="#e8dcef" left="#cdbade" right="#d9c9e7" />
     <Cube x={6.85} y={7} z={2.52} w={2.15} d={.3} h={.24} top="#e6dcf0" left="#bfadd4" right="#d4c3e3" />
@@ -416,11 +437,11 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
       <Cube x={6.88} y={7.25} z={.06} w={2.16} d={.48} h={.15} top="#e4dce9" left="#cbc2d3" right="#d5cdda" />
       <Cube x={6.88} y={7.73} z={.05} w={2.16} d={.35} h={.07} top="#e8e1eb" left="#d0c8d7" right="#d8d1de" />
       <Bench x={1.25} y={8.57} />
-      <Bench x={10.13} y={1.66} />
+      <Bench x={10.13 + grow} y={1.66} />
       <Plant x={-.7} y={7.1} big />
-      <Plant x={9.3} y={7.25} big />
-      <Tree x={10.4} y={8.55} />
-      <g><path d={`M${p(11,.3)[0]} ${p(11,.3)[1]}v-75`} stroke="#a6b5ad" strokeWidth="3" /><circle cx={p(11,.3)[0]} cy={p(11,.3)[1]-78} r="7" fill="#f8f5db" stroke="#bbc9bb" strokeWidth="2" /></g>
+      <Plant x={9.3 + grow} y={7.25} big />
+      <Tree x={10.4 + grow} y={8.55} />
+      <g><path d={`M${p(11 + grow,.3)[0]} ${p(11 + grow,.3)[1]}v-75`} stroke="#a6b5ad" strokeWidth="3" /><circle cx={p(11 + grow,.3)[0]} cy={p(11 + grow,.3)[1]-78} r="7" fill="#f8f5db" stroke="#bbc9bb" strokeWidth="2" /></g>
       {showCustomers && <g><Person x={9.9} y={8.9} color="#c190ae" walking delay={1} /><Person x={5.04} y={9.04} color="#7498b3" walking delay={3} /><Person x={10.38} y={4.44} color="#e0ad67" walking delay={2} /><Person x={-.66} y={8.67} color="#8aada1" /></g>}
     </g>}
   </g>;

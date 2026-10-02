@@ -1,5 +1,6 @@
 import type { Layout, PlaceableKind, Placement } from '../game/data';
-import { footprint, placementFits, rotatable } from '../game/layout';
+import { BASE_GRID, footprint, placementFits, rotatable } from '../game/layout';
+import type { Grid } from '../game/layout';
 import { p } from './isoGeometry';
 
 /**
@@ -122,10 +123,10 @@ export function canRotate(kind: PlaceableKind) {
 }
 
 /** The moved position, or null when a piece is already standing there. */
-export function moveTarget(layout: Layout, kind: PlaceableKind, place: Placement, id: string, dx: number, dy: number): Placement | null {
+export function moveTarget(layout: Layout, kind: PlaceableKind, place: Placement, id: string, dx: number, dy: number, grid: Grid = BASE_GRID): Placement | null {
   const target: Placement = { ...place, x: place.x + dx, y: place.y + dy };
   if (target.x === place.x && target.y === place.y) return null;
-  return placementFits(layout, kind, target, id) ? target : null;
+  return placementFits(layout, kind, target, id, grid) ? target : null;
 }
 
 /**
@@ -154,10 +155,10 @@ export function rotatedAnchors(kind: PlaceableKind, place: Placement): Placement
  * footprint rarely fits on the very same tile – in that case the piece is
  * nudged to the nearest free spot that stays around its old centre.
  */
-export function rotateTarget(layout: Layout, kind: PlaceableKind, place: Placement, id: string): Placement | null {
+export function rotateTarget(layout: Layout, kind: PlaceableKind, place: Placement, id: string, grid: Grid = BASE_GRID): Placement | null {
   if (!rotatable(kind)) return null;
   for (const candidate of rotatedAnchors(kind, place)) {
-    if (placementFits(layout, kind, candidate, id)) return candidate;
+    if (placementFits(layout, kind, candidate, id, grid)) return candidate;
   }
   return null;
 }

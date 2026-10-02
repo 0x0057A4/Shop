@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import type { FurnitureKind, GameState, Recipe, ShopKind } from '../game/data';
-import { getItem, money, number, RARITY_LABELS, SHOPS, SHOP_ORDER } from '../game/data';
-import { addEvent, buyFurniture, buyMaterial, cancelJob, canBuyMaterial, canProduce, capacity, enqueue, goalProgress, makeOrders, manageCards, reservedSpace, sellStock, startRepair, stockCount } from '../game/engine';
-import { createShopDisplay } from '../game/visualInventory';
+import { SHELF_CAPACITY, STAFF_HIRE_COST, STAFF_WAGE, getItem, money, number, RARITY_LABELS, SHOPS, SHOP_ORDER } from '../game/data';
+import { STAFF_ROLE_LIST, addEvent, buyFurniture, buyMaterial, cancelJob, canBuyMaterial, canProduce, capacity, enqueue, expandShop, goalProgress, hireStaff, makeOrders, manageCards, nextExpansion, reservedSpace, rolesOf, sellStock, setStaffRole, shelfTierCount, shelfUpgradeCost, startRepair, stockCount, upgradeShelf } from '../game/engine';
+import { createShopDisplay, SHELF_SLOTS, shelfTierOf } from '../game/visualInventory';
+import { gridOf, piecesOf, placeOf } from '../game/layout';
 import { CreatureArt } from './Cards';
 import { GoodPortrait } from './IsoGoods';
 import { Icon, Progress, ShopIcon } from './Ui';
@@ -44,6 +45,7 @@ export function ProductionView({ game, kind, update, notify, initialTab = 'craft
   const shop = game.shops[kind];
   return <div className="management-view">
     <div className="view-toolbar"><div className="tabs"><button className={tab === 'craft' ? 'active' : ''} onClick={() => setTab('craft')}><Icon name="settings" size={16} />Herstellung</button>{kind === 'it' && <button className={tab === 'repair' ? 'active' : ''} onClick={() => setTab('repair')}><Icon name="wrench" size={16} />Reparaturen<span>{shop.orders.filter(o => o.status === 'available').length}</span></button>}</div><span className="quiet-label"><Icon name="zap" size={14} />{Math.round((1+shop.skill*.15)*100)}% Effizienz</span></div>
+    {shop.staff === 0 && <div className="staff-warning"><Icon name="staff" size={18}/><p>Hier passiert gerade nichts: Dein Team ist noch leer. Stelle unter <strong>Personal</strong> jemanden ein – für Kasse, Lager oder zum Auffüllen.</p></div>}
     {tab === 'craft' || kind !== 'it' ? <><div className="production-note"><Icon name={kind === 'bakery' ? 'bread' : 'boxes'} size={20} /><p>{kind === 'bakery' ? 'Erst der Teig, dann das Croissant. Vorprodukte bleiben im Lager, fertige Backwaren landen direkt im Verkauf.' : kind === 'it' ? 'Vom Mainboard zum fertigen PC: Stelle Vorprodukte her und verarbeite sie in deiner nächsten Charge.' : 'Vom Rohling zum Sammlerstück: Drucke Booster, veredle Einzelkarten und stelle spielbereite Decks zusammen.'}</p></div><div className="recipe-grid">{SHOPS[kind].recipes.map(recipe => <RecipeTile key={recipe.id} game={game} kind={kind} recipe={recipe} update={update} />)}</div></> : <div className="repair-orders"><div className="section-title"><h3>Ein zweites Leben für gute Technik.</h3><button className="text-button" disabled={shop.orders.some(o => o.status !== 'done')} onClick={() => update(g => { const next=structuredClone(g); next.shops.it.orders=makeOrders(); return next; },'Drei neue Service-Anfragen sind angekommen.')}><Icon name="reset" size={14} />Neue Anfragen</button></div>{shop.orders.map(order => <div className={`repair-order ${order.status === 'done' ? 'finished' : ''}`} key={order.id}><span className="repair-device"><Icon name={order.device.includes('PC') ? 'cpu' : 'monitor'} size={27} /></span><div className="repair-details"><h3>{order.device}</h3><p>{order.problem}</p><span><Icon name="clock" size={13} />{order.duration}s <i />{order.chips} × Mikrochip</span></div><div className="repair-reward"><strong>{money(order.reward)}</strong><small>Service-Umsatz</small></div><button className={`button ${order.status === 'available' ? 'primary' : 'secondary'} small`} disabled={order.status !== 'available' || shop.stock.chip < order.chips || shop.queue.length >= 6} onClick={() => { if(shop.stock.chip < order.chips) notify('Bestelle zuerst Mikrochips im Lager.'); else update(g => startRepair(g,order.id),'Das Gerät wird jetzt diagnostiziert und repariert.'); }}>{order.status === 'done' ? <><Icon name="check" size={14} />Fertig</> : order.status === 'queued' ? 'In Arbeit' : 'Reparieren'}</button></div>)}<p className="inline-note"><Icon name="shield" size={15} />Diagnose, Austausch und Funktionstest laufen automatisch. Erfolgreiche Reparaturen bringen +2 Beliebtheit.</p></div>}
     <QueueList game={game} kind={kind} update={update} />
   </div>;
@@ -95,7 +97,35 @@ export function FurniturePreview({ type, kind, shop }: { type: FurnitureKind; ki
 }
 export function FurnishingView({ game, kind, update, onArrange }: ViewProps & { onArrange?: () => void }) {
   const shop = game.shops[kind];
-  return <div className="management-view furnishing-view"><div className="production-note"><Icon name="sparkles" size={20} /><p>Mehr als nur Möbel: Regale schaffen Lagerplatz, Arbeitsplätze beschleunigen die Herstellung und Extras machen deinen Laden zum Lieblingsort.</p></div>
+  const expansion = nextExpansion(shop);
+  const largeShelves = shelfTierCount(shop, 2);
+  const gridSize = gridOf(shop);
+  return <div className="management-view furnishing-view">
+    <section className="expansion-card">
+      <span className="expansion-icon"><Icon name="expand" size={22}/></span>
+      <div>
+        <h3>{expansion ? `Ausbau: ${expansion.label}` : 'Voll ausgebaut'}</h3>
+        <p>{expansion ? 'Zwei Kacheln mehr Verkaufsfläche, Platz für weitere Regale und Arbeitsplätze. Deine Möbel bleiben stehen.' : 'Deine Verkaufsfläche nutzt bereits die grösste Grösse.'}</p>
+        <span className="expansion-size"><Icon name="grid" size={13}/>{gridSize.w} × {gridSize.h} Kacheln · Ausbaustufe {shop.expansions}/2</span>
+      </div>
+      <button className="button primary" disabled={!expansion || game.coins < expansion.cost} onClick={()=>update(g=>expandShop(g,kind),'Deine Verkaufsfläche ist gewachsen!')}>{expansion ? <><Icon name="expand" size={16}/>Erweitern · {money(expansion.cost)}</> : 'Voll ausgebaut'}</button>
+    </section>
+    <section className="shelf-upgrade-card">
+      <div className="section-title"><h3>Regale ausbauen</h3><span>{largeShelves}/{shop.furniture.shelf} grosse Regale · {capacity(shop)} Lagerplätze</span></div>
+      <p className="section-intro">Kleine Regale sind halbhoch, grosse Regale reichen bis zur Decke und zeigen mehr Ware. Jedes Upgrade schafft Lagerplatz und füllt die Auslage sichtbar.</p>
+      <div className="shelf-upgrade-list">{Array.from({length:shop.furniture.shelf},(_,index) => {
+        const tier=shelfTierOf(shop,index);
+        const cost=shelfUpgradeCost(shop,index);
+        const piece=piecesOf(shop).find(entry=>entry.kind==='shelf'&&entry.index===index);
+        const place=piece ? placeOf(shop.layout,piece) : {x:0,y:0,rot:0 as const};
+        return <div className={`shelf-upgrade-row ${tier === 2 ? 'is-large' : ''}`} key={index}>
+          <span className="shelf-art" aria-hidden="true">{Array.from({length: tier === 2 ? 3 : 2},(_,level) => <i key={level} style={{height: tier === 2 ? 7 : 5}}/>)}</span>
+          <div><h3>Regal {index + 1} · {tier === 2 ? 'gross' : 'klein, halbhoch'}</h3><p>{SHELF_SLOTS[tier]} Plätze in der Auslage · {SHELF_CAPACITY[tier]} Lagerplätze · Kachel {place.x}/{place.y}</p></div>
+          <button className="button secondary small" disabled={tier === 2 || game.coins < cost} onClick={()=>update(g=>upgradeShelf(g,kind,index),`Regal ${index + 1} ist jetzt gross.`)}>{tier === 2 ? 'Ausgebaut' : `Ausbauen · ${money(cost)}`}</button>
+        </div>;
+      })}</div>
+    </section>
+    <div className="production-note"><Icon name="sparkles" size={20} /><p>Mehr als nur Möbel: Regale schaffen Lagerplatz, Arbeitsplätze beschleunigen die Herstellung und Extras machen deinen Laden zum Lieblingsort.</p></div>
     {onArrange && <div className="arrange-note"><span className="arrange-icon"><Icon name="move" size={20} /></span><div><h3>Stell deinen Laden um.</h3><p>Kasse, Regale, Arbeitsplätze und Deko lassen sich direkt auf den Kacheln deiner Ladenansicht verschieben und drehen.</p></div><button className="button secondary small" onClick={onArrange}><Icon name="grid" size={14} />Im Laden anordnen</button></div>}<div className="furniture-grid">{(Object.keys(SHOPS[kind].furniture) as FurnitureKind[]).map(type => {
     const item = SHOPS[kind].furniture[type], level=shop.furniture[type], cost=item.cost*level;
     return <div className="furniture-tile" key={type}><div className="furniture-preview" style={{background:SHOPS[kind].light}}><FurniturePreview type={type} kind={kind} shop={shop} /><span>{type === 'register' || type === 'workbench' ? 'Stufe' : 'Anzahl'} {level}/{item.max}</span></div><div className="furniture-info"><span className="eyebrow"><Icon name={furnitureIcons[type]} size={12} />{type === 'register' ? 'KASSE' : type === 'shelf' ? 'REGALE' : type === 'decor' ? 'EXTRAS & ACCESSOIRES' : 'ARBEITSPLATZ'}</span><h3>{item.name}</h3><p>{item.description}</p><button className="button secondary" disabled={level >= item.max || game.coins < cost} onClick={() => update(g => buyFurniture(g,kind,type), `${item.name} steht jetzt in deinem Laden.`)}><Icon name={level >= item.max ? 'check' : 'plus'} size={16} />{level >= item.max ? 'Voll ausgebaut' : type === 'register' ? 'Kasse verbessern' : 'Aufstellen'}{level < item.max && <strong>{money(cost)}</strong>}</button></div></div>;
@@ -105,7 +135,32 @@ export function FurnishingView({ game, kind, update, onArrange }: ViewProps & { 
 export function StaffView({ game, kind, update }: ViewProps) {
   const shop=game.shops[kind];
   const names=['Mila Weber','Noah Fischer','Leni Berg'];
-  return <div className="management-view staff-view"><div className="section-title"><h3>Gute Leute. Ein gutes Gefühl.</h3><span>{shop.staff}/3 Mitarbeiter</span></div><p className="section-intro">Dein Team kassiert und kümmert sich um die Produktion. Zusätzliche Mitarbeiter aktivieren weitere Arbeitsplätze.</p><div className="staff-list">{names.slice(0,shop.staff).map((name,i) => <div className="staff-row" key={name}><span className={`staff-avatar avatar-${i}`}>{name.split(' ').map(n => n[0]).join('')}</span><div><h3>{name}</h3><p>{i === 0 ? 'Verkauf & Produktion' : kind === 'it' ? 'Technik & Service' : kind === 'bakery' ? 'Backstube & Verkauf' : 'Sortieren & Verkauf'}</p></div><span className="staff-status"><i/>Im Einsatz</span><strong>120 €<small>/ Tag</small></strong></div>)}</div><button className="button primary" disabled={shop.staff >= 3 || game.coins < 250} onClick={() => update(g => {if(g.shops[kind].staff >= 3 || g.coins < 250)return g;const next=structuredClone(g);next.coins-=250;next.totalExpenses+=250;next.shops[kind].staff++;addEvent(next,`${names[next.shops[kind].staff-1]} ist im Team`,'Ein neuer Mitarbeiter macht deinen Laden noch besser.');return next;},'Willkommen im Team!')}><Icon name="plus" size={16}/>{shop.staff >= 3 ? 'Dein Team ist komplett' : 'Mitarbeiter einstellen · 250 €'}</button><section className="training-section"><div className="training-icon"><Icon name="book" size={30}/></div><div><h3>Gemeinsam besser werden.</h3><p>Ein Training erhöht das Produktionstempo deines gesamten Teams um 15%.</p><Progress value={shop.skill/3*100}/><span>Trainingsstufe {shop.skill}/3 · {Math.round((1+shop.skill*.15)*100)}% Produktionstempo</span></div><button className="button secondary" disabled={shop.skill >= 3 || game.coins < (shop.skill+1)*200} onClick={() => update(g => {if(g.shops[kind].skill>=3||g.coins<(g.shops[kind].skill+1)*200)return g;const next=structuredClone(g);const price=(next.shops[kind].skill+1)*200;next.coins-=price;next.totalExpenses+=price;next.shops[kind].skill++;return next;},'Training abgeschlossen. Dein Team arbeitet jetzt effizienter.')}>{shop.skill >= 3 ? 'Voll trainiert' : `Trainieren · ${money((shop.skill+1)*200)}`}</button></section><div className="staff-costs"><span>Personal am nächsten Tageswechsel<strong>{money(shop.staff*120)}</strong></span><span>Miete pro Tag<strong>60 €</strong></span></div></div>;
+  const roles=rolesOf(shop);
+  const cost=nextExpansion(shop);
+  return <div className="management-view staff-view">
+    <div className="section-title"><h3>Gute Leute. Ein gutes Gefühl.</h3><span>{shop.staff}/3 Mitarbeiter</span></div>
+    <p className="section-intro">Jede Person übernimmt eine Aufgabe. Kasse bedient die Warteschlange, die Lageristin bestellt Rohstoffe nach, Auffüllen hält die Regale voll.</p>
+    {shop.staff === 0 && <div className="staff-empty"><Icon name="staff" size={22}/><div><h3>Noch niemand im Team.</h3><p>Ohne Personal läuft der Laden nur, wenn du selbst an der Kasse stehst und produzierst.</p></div></div>}
+    <div className="staff-list">{names.slice(0,shop.staff).map((name,i) => <div className={`staff-row is-${roles[i]}`} key={name}>
+      <span className={`staff-avatar avatar-${i}`}>{name.split(' ').map(n => n[0]).join('')}</span>
+      <div><h3>{name}</h3><p>{shop.staff > 1 ? `Mitarbeiter ${i + 1} · ` : ''}{STAFF_ROLE_LIST.find(role => role.id === roles[i])?.description}</p></div>
+      <strong>{STAFF_WAGE} €<small>/ Tag</small></strong>
+      <div className="role-picker" role="group" aria-label={`Aufgabe von ${name}`}>
+        {STAFF_ROLE_LIST.map(role => <button key={role.id} type="button" className={`role-chip ${roles[i] === role.id ? 'active' : ''}`} aria-pressed={roles[i] === role.id} title={role.description} onClick={()=>update(g=>setStaffRole(g,kind,i,role.id),`${name} ist jetzt für ${role.label} zuständig.`)}><Icon name={role.id === 'register' ? 'register' : role.id === 'stock' ? 'box' : 'shelf'} size={14}/>{role.label}</button>)}
+      </div>
+    </div>)}</div>
+    <div className="hire-row">
+      {STAFF_ROLE_LIST.map(role => <button key={role.id} className="button secondary" disabled={shop.staff >= 3 || game.coins < STAFF_HIRE_COST} title={role.description} onClick={()=>update(g=>hireStaff(g,kind,role.id),`${names[game.shops[kind].staff]} übernimmt: ${role.label}.`)}><Icon name="plus" size={15}/>{role.label} einstellen · {STAFF_HIRE_COST} €</button>)}
+    </div>
+    {shop.staff >= 3 && <p className="hire-note"><Icon name="check" size={14}/>Dein Team ist komplett. Ändere die Aufgaben jederzeit oben.</p>}
+    <section className="training-section"><div className="training-icon"><Icon name="book" size={30}/></div><div><h3>Gemeinsam besser werden.</h3><p>Ein Training erhöht das Produktionstempo deines gesamten Teams um 15%.</p><Progress value={shop.skill/3*100}/><span>Trainingsstufe {shop.skill}/3 · {Math.round((1+shop.skill*.15)*100)}% Produktionstempo</span></div><button className="button secondary" disabled={shop.skill >= 3 || game.coins < (shop.skill+1)*200} onClick={() => update(g => {if(g.shops[kind].skill>=3||g.coins<(g.shops[kind].skill+1)*200)return g;const next=structuredClone(g);const price=(next.shops[kind].skill+1)*200;next.coins-=price;next.totalExpenses+=price;next.shops[kind].skill++;return next;},'Training abgeschlossen. Dein Team arbeitet jetzt effizienter.')}>{shop.skill >= 3 ? 'Voll trainiert' : `Trainieren · ${money((shop.skill+1)*200)}`}</button></section>
+    <section className="expansion-note">
+      <span className="expansion-icon"><Icon name="expand" size={20}/></span>
+      <div><h3>Mehr Platz für dein Team</h3><p>{cost ? `Eine grössere Verkaufsfläche gibt jedem mehr Raum: ${cost.label} für ${money(cost.cost)}.` : 'Deine Verkaufsfläche ist bereits voll ausgebaut.'}</p></div>
+      <button className="button primary small" disabled={!cost || game.coins < cost.cost} onClick={()=>update(g=>expandShop(g,kind),'Deine Verkaufsfläche ist gewachsen!')}>{cost ? `Erweitern · ${money(cost.cost)}` : 'Voll ausgebaut'}</button>
+    </section>
+    <div className="staff-costs"><span>Aufgaben heute<strong>{roles.map(role => STAFF_ROLE_LIST.find(entry => entry.id === role)?.label).join(', ') || 'niemand'}</strong></span><span>Personal am nächsten Tageswechsel<strong>{money(shop.staff*STAFF_WAGE)}</strong></span><span>Miete pro Tag<strong>60 €</strong></span></div>
+  </div>;
 }
 
 export function FinanceView({ game, notify }: ViewProps) {

@@ -1,7 +1,7 @@
 import { SHOPS, roundCents } from './data';
 import type { PlaceableKind, Placement, Shop, ShopKind } from './data';
-import { freeSides, isWalkable, neighbours, pieceCount, placeOf, footprint, tileKey } from './layout';
-import type { Tile } from './layout';
+import { BASE_GRID, freeSides, gridOf, isWalkable, neighbours, pieceCount, placeOf, footprint, tileKey } from './layout';
+import type { Grid, Tile } from './layout';
 
 /** How many customers fit into one line at a service. */
 export const QUEUE_LENGTH = 4;
@@ -63,7 +63,7 @@ export function servicePieces(kind: ShopKind, shop: Shop): ServiceInfo[] {
  * The line in front of a service, ordered from the counter outwards. The first
  * spot is right in front of the piece, the rest follow the free floor.
  */
-export function queueSpots(info: ServiceInfo, blocked: Set<string>, count = QUEUE_LENGTH): Tile[] {
+export function queueSpots(info: ServiceInfo, blocked: Set<string>, count = QUEUE_LENGTH, grid: Grid = BASE_GRID): Tile[] {
   const sides = freeSides(info.place, info.kind, blocked);
   if (!sides.length) return [];
   const size = footprint(info.kind, info.place.rot);
@@ -73,7 +73,7 @@ export function queueSpots(info: ServiceInfo, blocked: Set<string>, count = QUEU
   const used = new Set([tileKey(front)]);
   while (spots.length < count) {
     const last = spots[spots.length - 1];
-    const options = neighbours(last).filter(tile => !used.has(tileKey(tile)) && isWalkable(tile, blocked) && tile.x + tile.y > center + .4);
+    const options = neighbours(last).filter(tile => !used.has(tileKey(tile)) && isWalkable(tile, blocked, grid) && tile.x + tile.y > center + .4);
     if (!options.length) break;
     const next = options.sort((a, b) => (b.x + b.y) - (a.x + a.y))[0];
     spots.push(next);
@@ -90,7 +90,7 @@ export function serviceQueues(kind: ShopKind, shop: Shop, blocked: Set<string>):
   return servicePieces(kind, shop).map(info => {
     const extra = new Set(blocked);
     used.forEach(key => extra.add(key));
-    const spots = queueSpots(info, extra);
+    const spots = queueSpots(info, extra, QUEUE_LENGTH, gridOf(shop));
     spots.forEach(spot => used.add(tileKey(spot)));
     return { info, spots };
   });

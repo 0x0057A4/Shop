@@ -1,4 +1,5 @@
 import type { FurnitureKind, Layout, PlaceableKind, Placement, Shop } from './data';
+import { SHOP_EXPANSIONS } from './data';
 
 export interface Tile { x: number; y: number }
 
@@ -9,6 +10,20 @@ export const GRID_H = 7;
 export const FLOOR_Z = 0.37;
 /** Tiles in front of the entrance. Customers walk in and out here. */
 export const DOOR_TILES: Tile[] = [{ x: 7, y: 6 }, { x: 8, y: 6 }];
+
+export interface Grid { w: number; h: number }
+
+/** The smallest sales floor. */
+export const BASE_GRID: Grid = { w: GRID_W, h: GRID_H };
+
+/** Every enlargement adds tiles to the right of the floor. */
+export function gridFor(expansions: number): Grid {
+  const level = Math.max(0, Math.min(SHOP_EXPANSIONS.length, Math.floor(expansions || 0)));
+  return { w: GRID_W + SHOP_EXPANSIONS.slice(0, level).reduce((sum, step) => sum + step.width, 0), h: GRID_H };
+}
+
+/** The sales floor of a shop, including its enlargements. */
+export const gridOf = (shop: Shop): Grid => gridFor(shop.expansions ?? 0);
 
 export const PLACEABLE_ORDER: PlaceableKind[] = ['showcase', 'center', 'materials', 'register', 'shelf', 'workbench', 'decor'];
 export const SINGLETONS: PlaceableKind[] = ['showcase', 'center', 'materials', 'register'];
@@ -90,9 +105,9 @@ export function tilesOf(place: Placement, kind: PlaceableKind): Tile[] {
   return tiles;
 }
 
-export function insideGrid(place: Placement, kind: PlaceableKind) {
+export function insideGrid(place: Placement, kind: PlaceableKind, grid: Grid = BASE_GRID) {
   const { w, d } = footprint(kind, place.rot);
-  return place.x >= 0 && place.y >= 0 && place.x + w <= GRID_W && place.y + d <= GRID_H;
+  return place.x >= 0 && place.y >= 0 && place.x + w <= grid.w && place.y + d <= grid.h;
 }
 
 /** Collects all tiles taken by pieces of a layout, ignoring one optional piece. */
@@ -107,20 +122,20 @@ export function occupiedTiles(layout: Layout, exceptId?: string): Set<string> {
   return tiles;
 }
 
-export function placementFits(layout: Layout, kind: PlaceableKind, place: Placement, exceptId?: string) {
-  if (!insideGrid(place, kind)) return false;
+export function placementFits(layout: Layout, kind: PlaceableKind, place: Placement, exceptId?: string, grid: Grid = BASE_GRID) {
+  if (!insideGrid(place, kind, grid)) return false;
   const taken = occupiedTiles(layout, exceptId);
   return tilesOf(place, kind).every(tile => !isDoorTile(tile) && !taken.has(tileKey(tile)));
 }
 
 /** First free spot for a piece, preferring the upright orientation. */
-export function firstFreeSpot(layout: Layout, kind: PlaceableKind): Placement | null {
+export function firstFreeSpot(layout: Layout, kind: PlaceableKind, grid: Grid = BASE_GRID): Placement | null {
   const rotations: (0 | 1)[] = rotatable(kind) ? [0, 1] : [0];
-  for (let y = 0; y < GRID_H; y++) {
-    for (let x = 0; x < GRID_W; x++) {
+  for (let y = 0; y < grid.h; y++) {
+    for (let x = 0; x < grid.w; x++) {
       for (const rot of rotations) {
         const place: Placement = { x, y, rot };
-        if (placementFits(layout, kind, place)) return place;
+        if (placementFits(layout, kind, place, undefined, grid)) return place;
       }
     }
   }
@@ -132,13 +147,13 @@ export function firstFreeSpot(layout: Layout, kind: PlaceableKind): Placement | 
  * clear. It may share tiles with another piece, but the shop stays renderable
  * until the player rearranges it.
  */
-function emergencySpot(kind: PlaceableKind): Placement {
+function emergencySpot(kind: PlaceableKind, grid: Grid = BASE_GRID): Placement {
   const rotations: (0 | 1)[] = rotatable(kind) ? [0, 1] : [0];
-  for (let y = 0; y < GRID_H; y++) {
-    for (let x = 0; x < GRID_W; x++) {
+  for (let y = 0; y < grid.h; y++) {
+    for (let x = 0; x < grid.w; x++) {
       for (const rot of rotations) {
         const place: Placement = { x, y, rot };
-        if (insideGrid(place, kind) && tilesOf(place, kind).every(tile => !isDoorTile(tile))) return place;
+        if (insideGrid(place, kind, grid) && tilesOf(place, kind).every(tile => !isDoorTile(tile))) return place;
       }
     }
   }
@@ -158,17 +173,18 @@ function shapeOf(input: unknown): Placement | null {
  */
 export function normalizeLayout(shop: Shop, saved?: Layout): Layout {
   const layout: Layout = {};
+  const grid = gridOf(shop);
   const pieces = piecesOf(shop);
   pieces.forEach(piece => {
     const candidates = [shapeOf(saved?.[piece.id]), DEFAULTS[piece.id]].filter(Boolean) as Placement[];
-    const chosen = candidates.find(candidate => placementFits(layout, piece.kind, candidate));
+    const chosen = candidates.find(candidate => placementFits(layout, piece.kind, candidate, undefined, grid));
     if (chosen) layout[piece.id] = chosen;
   });
   pieces.forEach(piece => {
     if (layout[piece.id]) return;
-    const free = firstFreeSpot(layout, piece.kind);
+    const free = firstFreeSpot(layout, piece.kind, grid);
     if (free) { layout[piece.id] = free; return; }
-    layout[piece.id] = emergencySpot(piece.kind);
+    layout[piece.id] = emergencySpot(piece.kind, grid);
   });
   return layout;
 }
@@ -178,18 +194,19 @@ export function placeOf(layout: Layout, piece: Piece): Placement {
 }
 
 export function layoutFits(layout: Layout, shop: Shop) {
-  return piecesOf(shop).every(piece => placementFits(layout, piece.kind, placeOf(layout, piece), piece.id));
+  const grid = gridOf(shop);
+  return piecesOf(shop).every(piece => placementFits(layout, piece.kind, placeOf(layout, piece), piece.id, grid));
 }
 
 export function blockedTiles(layout: Layout): Set<string> {
   return occupiedTiles(layout);
 }
 
-export const isInside = (tile: Tile) => tile.x >= 0 && tile.y >= 0 && tile.x < GRID_W && tile.y < GRID_H;
+export const isInside = (tile: Tile, grid: Grid = BASE_GRID) => tile.x >= 0 && tile.y >= 0 && tile.x < grid.w && tile.y < grid.h;
 /** The pavement right in front of the shop entrance. */
 export const isOutside = (tile: Tile) => (tile.x === 7 || tile.x === 8) && tile.y >= GRID_H && tile.y <= GRID_H + 1;
-export const isWalkable = (tile: Tile, blocked: Set<string>) =>
-  (isInside(tile) && !blocked.has(tileKey(tile))) || isOutside(tile);
+export const isWalkable = (tile: Tile, blocked: Set<string>, grid: Grid = BASE_GRID) =>
+  (isInside(tile, grid) && !blocked.has(tileKey(tile))) || isOutside(tile);
 
 const STEPS: Tile[] = [{ x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }];
 
@@ -198,8 +215,8 @@ export function neighbours(tile: Tile): Tile[] {
 }
 
 /** Breadth first search across the free tiles of the shop floor. */
-export function findPath(from: Tile, goal: Tile, blocked: Set<string>): Tile[] | null {
-  if (!isWalkable(goal, blocked)) return null;
+export function findPath(from: Tile, goal: Tile, blocked: Set<string>, grid: Grid = BASE_GRID): Tile[] | null {
+  if (!isWalkable(goal, blocked, grid)) return null;
   const start = tileKey(from);
   const target = tileKey(goal);
   if (start === target) return [from];
@@ -210,7 +227,7 @@ export function findPath(from: Tile, goal: Tile, blocked: Set<string>): Tile[] |
     const current = queue.shift()!;
     for (const next of neighbours(current)) {
       const key = tileKey(next);
-      if (previous.has(key) || !isWalkable(next, blocked)) continue;
+      if (previous.has(key) || !isWalkable(next, blocked, grid)) continue;
       previous.set(key, tileKey(current));
       byKey.set(key, next);
       if (key === target) {

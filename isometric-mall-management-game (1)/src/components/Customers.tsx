@@ -3,7 +3,8 @@ import type { CSSProperties } from 'react';
 import type { Shop, ShopKind } from '../game/data';
 import type { ShopDisplay } from '../game/visualInventory';
 import type { Tile } from '../game/layout';
-import { DOOR_TILES, blockedTiles, findPath, footprint, freeSides, isWalkable, piecesOf, placeOf } from '../game/layout';
+import { DOOR_TILES, blockedTiles, findPath, footprint, freeSides, gridOf, isWalkable, piecesOf, placeOf } from '../game/layout';
+import type { Grid } from '../game/layout';
 import type { QueueCustomer } from '../game/services';
 import { makeCustomer, serviceQueues } from '../game/services';
 import type { ServiceQueue } from '../game/services';
@@ -41,6 +42,7 @@ let walkerSeq = 0;
 
 interface CrowdContext {
   blocked: Set<string>;
+  grid: Grid;
   browse: Tile[];
   services: ServiceQueue[];
   doors: Tile[];
@@ -63,7 +65,7 @@ export function crowdContext(kind: ShopKind, shop: Shop, display: ShopDisplay): 
       : piece.kind === 'showcase' || piece.kind === 'center' || piece.kind === 'materials' ? 3 : 1;
     for (let i = 0; i < appeal; i++) browse.push(...spots);
   });
-  return { blocked, browse, services: serviceQueues(kind, shop, blocked), doors: DOOR_TILES.map(door => ({ ...door })) };
+  return { blocked, grid: gridOf(shop), browse, services: serviceQueues(kind, shop, blocked), doors: DOOR_TILES.map(door => ({ ...door })) };
 }
 
 function pick<T>(list: T[]): T | undefined {
@@ -71,7 +73,7 @@ function pick<T>(list: T[]): T | undefined {
 }
 
 function planTo(from: Tile, goal: Tile, context: CrowdContext): Tile[] | null {
-  return findPath(from, goal, context.blocked);
+  return findPath(from, goal, context.blocked, context.grid);
 }
 
 function planOutside(from: Tile, context: CrowdContext): Tile[] | null {
@@ -145,7 +147,7 @@ export function stepCrowd(state: CrowdState, kind: ShopKind, shop: Shop, display
     if (walker.pause > 0) { next.push({ ...walker, pause: walker.pause - 1 }); continue; }
     if (walker.step < walker.path.length - 1) {
       const upcoming = walker.path[walker.step + 1];
-      if (isWalkable(upcoming, context.blocked)) { next.push({ ...walker, step: walker.step + 1 }); continue; }
+      if (isWalkable(upcoming, context.blocked, context.grid)) { next.push({ ...walker, step: walker.step + 1 }); continue; }
       // Furniture moved into the way: find a new route, otherwise leave the shop.
       const current = walker.path[walker.step];
       const replanned = walker.target ? planTo(current, walker.target, context) : null;

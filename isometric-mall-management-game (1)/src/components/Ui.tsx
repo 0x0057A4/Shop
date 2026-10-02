@@ -26,6 +26,7 @@ const iconMap = {
   shield: ShieldCheck, book: BookOpen, arrow: ArrowRight, sun: Sun, lock: LockKeyhole,
   monitor: Monitor, chair: Armchair, register: CreditCard, move: MoveUpRight,
   upload: Upload, menu: Menu, gift: Gift,
+  staff: Users, shelf: Layers, box: Package, expand: Maximize,
 };
 
 export type IconName = keyof typeof iconMap;

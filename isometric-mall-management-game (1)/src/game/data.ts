@@ -1,6 +1,10 @@
 export type ShopKind = 'tcg' | 'it' | 'bakery';
 export type Page = 'overview' | 'production' | 'inventory' | 'furnishing' | 'staff' | 'finances' | 'quests';
 export type FurnitureKind = 'register' | 'shelf' | 'decor' | 'workbench';
+/** What a hired staff member is responsible for. */
+export type StaffRole = 'register' | 'stock' | 'refill';
+/** 1 = small half-height shelf, 2 = tall shelf with more room. */
+export type ShelfTier = 1 | 2;
 
 /** Everything a player can place on the shop floor, tile by tile. */
 export type PlaceableKind = FurnitureKind | 'showcase' | 'center' | 'materials';
@@ -77,6 +81,12 @@ export interface Shop {
   dailyRevenue: number;
   hourlyRevenue: number[];
   layout: Layout;
+  /** Task of every hired staff member, one entry per person. */
+  staffRoles: StaffRole[];
+  /** How often the sales floor was enlarged: 0 = 9 × 7 tiles. */
+  expansions: number;
+  /** Upgrade level of every shelf, one entry per shelf: 1 = small, 2 = tall. */
+  shelfTiers: ShelfTier[];
 }
 
 export interface GameEvent {
@@ -110,6 +120,20 @@ export interface GameState {
   goalClaimed: boolean;
   savedAt: number;
 }
+
+/** Price of the first and second enlargement of a sales floor. */
+export const SHOP_EXPANSIONS = [
+  { cost: 1800, width: 2, label: 'Seitenflügel' },
+  { cost: 4200, width: 2, label: 'Grosse Halle' },
+];
+/** Price of turning one small shelf into a tall one. */
+export const SHELF_UPGRADE_COST = 850;
+/** Cost of hiring a staff member. */
+export const STAFF_HIRE_COST = 250;
+/** Daily wage of one staff member. */
+export const STAFF_WAGE = 120;
+/** Storage room added by one shelf, small or tall. */
+export const SHELF_CAPACITY: Record<ShelfTier, number> = { 1: 40, 2: 70 };
 
 export interface ShopConfig {
   label: string;

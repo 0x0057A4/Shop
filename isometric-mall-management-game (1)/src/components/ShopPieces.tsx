@@ -1,8 +1,9 @@
-import type { Placement, Shop, ShopKind } from '../game/data';
+import type { Placement, ShelfTier, Shop, ShopKind } from '../game/data';
 import { SHOPS } from '../game/data';
 import type { Piece } from '../game/layout';
 import { FLOOR_Z } from '../game/layout';
 import type { ShopDisplay, VisibleGood } from '../game/visualInventory';
+import { SHELF_SHAPE, refillStack, shelfTierOf } from '../game/visualInventory';
 import { GoodFigure } from './IsoGoods';
 import { Cube, p, pts } from './isoGeometry';
 
@@ -59,22 +60,44 @@ const rackColors = (kind: ShopKind) => kind === 'tcg'
     ? { dark: '#7c9ba9', light: '#b6cbd3', top: '#d0dce3' }
     : { dark: '#b38c6d', light: '#d4b699', top: '#e9d2b4' };
 
-/** A shelf: designed upright in a 2 × 1 footprint, drawn centered on its tiles. */
-export function Rack({ place, kind, shop, units, onInspect, selected }: { place: Placement; kind: ShopKind; shop: Shop; units: VisibleGood[]; onInspect?: (good: VisibleGood) => void; selected?: VisibleGood | null }) {
+/**
+ * A shelf, drawn in the size it was bought in: a small half-height shelf or a
+ * tall one. Each slot can hold a stack of goods when somebody keeps the shelves
+ * filled, so the shop looks stocked.
+ */
+export function Rack({ place, kind, shop, units, tier = 1, stack = 1, onInspect, selected }: { place: Placement; kind: ShopKind; shop: Shop; units: VisibleGood[]; tier?: ShelfTier; stack?: number; onInspect?: (good: VisibleGood) => void; selected?: VisibleGood | null }) {
   const c = rackColors(kind);
+  const shape = SHELF_SHAPE[tier];
   const alongY = place.rot === 1;
   const ox = place.x + (alongY ? .175 : .16), oy = place.y + (alongY ? .16 : .175);
-  const w = alongY ? .65 : 1.68, d = alongY ? 1.68 : .65;
+  const base = alongY ? .65 : 1.68, depth = alongY ? 1.68 : .65;
+  // A small shelf keeps a little air above the goods, a tall one reaches higher.
+  const height = shape.height;
+  const w = alongY ? (tier === 1 ? .55 : base) : (tier === 1 ? 1.7 : base);
+  const d = alongY ? (tier === 1 ? 1.7 : depth) : (tier === 1 ? .55 : depth);
+  const levels = Array.from({ length: shape.rows }, (_, row) => .42 + row * (tier === 1 ? .42 : .64));
   return <g>
-    <Cube x={ox} y={oy} w={w} d={d} h={2.15} top={c.top} left={c.dark} right={c.light} />
-    {[.48, 1.12, 1.76].map((z, level) => <g key={z}>
+    <Cube x={ox} y={oy} w={w} d={d} h={height} top={c.top} left={c.dark} right={c.light} />
+    {levels.map((z, row) => <g key={z}>
       <Cube x={ox + .03} y={oy + .03} z={z} w={w - .06} d={d + .04} h={.075} top={c.top} left={c.light} right={c.top} />
-      {[0, 1, 2].map(i => {
-        const unit = units[level * 3 + i];
-        return unit && <GoodFigure key={`${level}-${i}-${unit.id}`} x={ox + (alongY ? .13 : .11 + i * .51)} y={oy + (alongY ? .12 + i * .51 : .28)} z={z + .085} kind={kind} good={unit} count={unit.type === 'card' ? 1 : shop.stock[unit.id]} selected={selected?.type === unit.type && selected.id === unit.id} onInspect={onInspect} />;
+      {Array.from({ length: shape.columns }, (_, column) => {
+        const slot = row * shape.columns + column;
+        const step = (alongY ? d : w) / shape.columns;
+        const offset = (alongY ? d : w) / shape.columns / 2;
+        return Array.from({ length: stack }, (_, pile) => {
+          const unit = units[slot * stack + pile];
+          if (!unit) return null;
+          const spot = .12 + column * step + offset - .06 + pile * .12;
+          return <GoodFigure key={`${row}-${column}-${pile}-${unit.id}`}
+            x={ox + (alongY ? .13 + pile * .1 : spot)}
+            y={oy + (alongY ? spot : .28 + pile * .12)}
+            z={z + .085 + pile * .16}
+            kind={kind} good={unit} count={unit.type === 'card' ? 1 : shop.stock[unit.id]}
+            selected={selected?.type === unit.type && selected.id === unit.id} onInspect={onInspect} />;
+        });
       })}
     </g>)}
-    <Cube x={ox} y={oy} z={2.54} w={w} d={d} h={.1} top={c.top} left={c.light} right={c.light} />
+    <Cube x={ox} y={oy} z={height + .39} w={w} d={d} h={.1} top={c.top} left={c.light} right={c.light} />
   </g>;
 }
 
@@ -91,13 +114,17 @@ export function MaterialsShelf({ place, kind, units, shop, onInspect, selected }
 }
 
 /** Glass display case in the front area. */
-export function ShowcaseCabinet({ place, kind, units, shop, onInspect, selected }: { place: Placement; kind: ShopKind; units: VisibleGood[]; shop: Shop; onInspect?: (good: VisibleGood) => void; selected?: VisibleGood | null }) {
+export function ShowcaseCabinet({ place, kind, units, shop, stack = 1, onInspect, selected }: { place: Placement; kind: ShopKind; units: VisibleGood[]; shop: Shop; stack?: number; onInspect?: (good: VisibleGood) => void; selected?: VisibleGood | null }) {
   const l: Local = { tx: place.x, ty: place.y, rot: place.rot };
   const left = kind === 'tcg' ? '#c1afd7' : kind === 'it' ? '#a1bfcd' : '#d9b99a';
   const right = kind === 'tcg' ? '#d4c2e4' : kind === 'it' ? '#c3d9e0' : '#e9d1b4';
   return <g>
     <Box l={l} u={.2} v={.1} w={2.6} d={.95} h={.62} top="#d1bdde" left={left} right={right} />
-    {units.map((unit, i) => <GoodFigure key={`showcase-${i}-${unit.id}`} x={lx(l, .34 + i * .48, .35)} y={ly(l, .34 + i * .48, .35)} z={1.01} good={unit} kind={kind} count={unit.type === 'card' ? 1 : shop.stock[unit.id]} selected={selected?.type === unit.type && selected.id === unit.id} onInspect={onInspect} />)}
+    {units.map((unit, i) => {
+      const slot = Math.floor(i / stack), pile = i % stack;
+      const u = .34 + slot * .48 + pile * .16, v = .35 - pile * .12;
+      return <GoodFigure key={`showcase-${i}-${unit.id}`} x={lx(l, u, v)} y={ly(l, u, v)} z={1.01 + pile * .2} good={unit} kind={kind} count={unit.type === 'card' ? 1 : shop.stock[unit.id]} selected={selected?.type === unit.type && selected.id === unit.id} onInspect={onInspect} />;
+    })}
     <g pointerEvents="none">
       <Box l={l} u={.2} v={.1} z={1.0} w={2.6} d={.95} h={.53} top="#eaf3f3" left="#d7eeee" right="#c9e4e9" opacity={.3} />
       <polyline points={flat(l, [[.2, 1.05, 1], [.2, 1.05, 1.53], [2.8, 1.05, 1.53], [2.8, 1.05, 1]])} fill="none" stroke="#f8f6fd" strokeWidth="2" />
@@ -222,9 +249,9 @@ export function PieceView({ piece, place, shopKind, shop, display, stations, sel
   onInspect?: (good: VisibleGood) => void;
 }) {
   const accent = SHOPS[shopKind].color;
-  if (piece.kind === 'shelf') return <Rack place={place} kind={shopKind} shop={shop} units={display.shelves[piece.index] || []} onInspect={onInspect} selected={selected} />;
+  if (piece.kind === 'shelf') return <Rack place={place} kind={shopKind} shop={shop} units={display.shelves[piece.index] || []} tier={shelfTierOf(shop, piece.index)} stack={refillStack(shop)} onInspect={onInspect} selected={selected} />;
   if (piece.kind === 'materials') return <MaterialsShelf place={place} kind={shopKind} units={display.materials} shop={shop} onInspect={onInspect} selected={selected} />;
-  if (piece.kind === 'showcase') return <ShowcaseCabinet place={place} kind={shopKind} units={display.showcase} shop={shop} onInspect={onInspect} selected={selected} />;
+  if (piece.kind === 'showcase') return <ShowcaseCabinet place={place} kind={shopKind} units={display.showcase} shop={shop} stack={refillStack(shop)} onInspect={onInspect} selected={selected} />;
   if (piece.kind === 'center') return <CenterDisplay place={place} kind={shopKind} units={display.center} shop={shop} onInspect={onInspect} selected={selected} />;
   if (piece.kind === 'register') return <Counter place={place} kind={shopKind} level={shop.furniture.register} accent={accent} />;
   if (piece.kind === 'workbench') return <WorkbenchStation place={place} kind={shopKind} index={piece.index} station={stations[piece.index] || { good: null, progress: 0, active: false, working: false }} accent={accent} selected={selected} onInspect={onInspect} />;

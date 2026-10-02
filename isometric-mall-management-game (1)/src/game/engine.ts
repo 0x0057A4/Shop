@@ -1,6 +1,6 @@
-import { CARD_NAMES, SHOPS, SHOP_ORDER, clock, getItem, money } from './data';
-import type { FurnitureKind, GameState, Placement, RepairOrder, Shop, ShopKind, TradingCard } from './data';
-import { normalizeLayout, piecesOf, placementFits, placeOf } from './layout';
+import { CARD_NAMES, SHELF_CAPACITY, SHELF_UPGRADE_COST, SHOPS, SHOP_EXPANSIONS, SHOP_ORDER, STAFF_HIRE_COST, STAFF_WAGE, clock, getItem, money } from './data';
+import type { FurnitureKind, GameState, Placement, RepairOrder, ShelfTier, Shop, ShopKind, StaffRole, TradingCard } from './data';
+import { gridOf, normalizeLayout, piecesOf, placementFits, placeOf } from './layout';
 import type { QueueCustomer } from './services';
 
 export const SAVE_KEY = 'mallside-save-v1';
@@ -18,9 +18,12 @@ function makeShop(kind: ShopKind): Shop {
   const shop: Shop = {
     owned: kind === 'tcg', name: SHOPS[kind].defaultName, popularity: 42,
     stock: { ...SHOPS[kind].starterStock }, furniture: { register: 1, shelf: 2, decor: 1, workbench: 1 },
-    queue: [], cards: [], orders: kind === 'it' ? makeOrders() : [], staff: 1, skill: 0,
+    queue: [], cards: [], orders: kind === 'it' ? makeOrders() : [], staff: 0, skill: 0,
     price: 1, open: true, revenue: 0, sold: 0, produced: 0, autoRecipes: [], dailyRevenue: 0, hourlyRevenue: Array(12).fill(0),
     layout: {},
+    staffRoles: [],
+    expansions: 0,
+    shelfTiers: Array.from({ length: 2 }, () => 1 as ShelfTier),
   };
   shop.layout = normalizeLayout(shop);
   return shop;
@@ -47,6 +50,9 @@ export function loadGame(): GameState {
         if (save.shops?.[kind]) {
           save.shops[kind].produced ??= 0;
           save.shops[kind].autoRecipes ??= [];
+          save.shops[kind].expansions ??= 0;
+          save.shops[kind].staffRoles ??= Array.from({ length: save.shops[kind].staff || 0 }, () => 'register' as StaffRole);
+          save.shops[kind].shelfTiers ??= Array.from({ length: save.shops[kind].furniture?.shelf || 0 }, () => 1 as ShelfTier);
           SHOPS[kind].items.forEach(item => { save.shops[kind].stock[item.id] ??= SHOPS[kind].starterStock[item.id] || 0; });
         }
       });
@@ -72,14 +78,139 @@ export function isValidSave(input: unknown): input is GameState {
  * Makes a loaded or imported save playable: fills in missing furniture positions
  * and repairs arrangements that no longer fit the current shop floor.
  */
+/** Every task a staff member can take over, in the order of the staff page. */
+export const STAFF_ROLE_LIST: { id: StaffRole; label: string; short: string; description: string }[] = [
+  { id: 'register', label: 'Kasse', short: 'bedient die Schlange', description: 'Nimmt wartenden Kunden das Geld ab, auch wenn du gerade nicht an der Kasse stehst.' },
+  { id: 'stock', label: 'Lageristin', short: 'bestellt Rohstoffe nach', description: 'Kauft fehlende Rohstoffe automatisch nach, damit die Produktion weiterläuft.' },
+  { id: 'refill', label: 'Auffüllen', short: 'hält die Auslage voll', description: 'Räumt Ware in die Regale, zeigt Stapel in der Auslage und lässt die Beliebtheit langsam steigen.' },
+];
+
+export const staffRole = (shop: Shop, index: number): StaffRole => shop.staffRoles?.[index] ?? 'register';
+export const hasRole = (shop: Shop, role: StaffRole) => (shop.staffRoles || []).includes(role);
+export const rolesOf = (shop: Shop) => Array.from({ length: shop.staff }, (_, index) => staffRole(shop, index));
+export const shelfTier = (shop: Shop, index: number): ShelfTier => (shop.shelfTiers?.[index] === 2 ? 2 : 1);
+export const shelfTierCount = (shop: Shop, tier: ShelfTier) => Array.from({ length: shop.furniture.shelf }, (_, index) => shelfTier(shop, index)).filter(value => value === tier).length;
+export const expansionStep = (shop: Shop) => SHOP_EXPANSIONS[Math.min(shop.expansions || 0, SHOP_EXPANSIONS.length - 1)];
+export const nextExpansion = (shop: Shop) => (shop.expansions || 0) < SHOP_EXPANSIONS.length ? SHOP_EXPANSIONS[shop.expansions || 0] : null;
+export const shelfUpgradeCost = (shop: Shop, index: number) => SHELF_UPGRADE_COST + 250 * shelfTierCount(shop, 2) + 250 * index;
+
+/** Keeps saved games valid: roles, enlargements and shelf upgrades get defaults. */
+export function normalizeShop(shop: Shop) {
+  shop.expansions = Number.isFinite(shop.expansions) ? Math.max(0, Math.min(SHOP_EXPANSIONS.length, Math.floor(shop.expansions))) : 0;
+  shop.staff = Math.max(0, Math.min(3, Math.round(Number.isFinite(shop.staff) ? shop.staff : 0)));
+  const savedRoles = Array.isArray(shop.staffRoles) ? shop.staffRoles : [];
+  shop.staffRoles = Array.from({ length: shop.staff }, (_, index) => STAFF_ROLE_LIST.some(role => role.id === savedRoles[index]) ? savedRoles[index] as StaffRole : 'register');
+  const tiers = Array.isArray(shop.shelfTiers) ? shop.shelfTiers : [];
+  shop.shelfTiers = Array.from({ length: shop.furniture.shelf }, (_, index) => (tiers[index] === 2 ? 2 : 1) as ShelfTier);
+}
+
 export function normalizeGame(game: GameState): GameState {
   SHOP_ORDER.forEach(kind => {
     const shop = game.shops?.[kind];
     if (!shop) return;
+    normalizeShop(shop);
     shop.layout = normalizeLayout(shop, shop.layout);
   });
   return game;
 }
+
+/** Hires a staff member with a fixed task; the shop pays the signing fee. */
+export function hireStaff(game: GameState, kind: ShopKind, role: StaffRole): GameState {
+  const shop = game.shops[kind];
+  if (!game.hasChosen || !shop.owned || shop.staff >= 3 || game.coins < STAFF_HIRE_COST) return game;
+  const next = structuredClone(game);
+  const target = next.shops[kind];
+  next.coins -= STAFF_HIRE_COST;
+  next.totalExpenses += STAFF_HIRE_COST;
+  target.staff += 1;
+  target.staffRoles = [...(target.staffRoles || []), role];
+  const roleInfo = STAFF_ROLE_LIST.find(entry => entry.id === role)!;
+  addEvent(next, `Neue Mitarbeiterin: ${roleInfo.label}`, `${roleInfo.description} Kosten: ${STAFF_HIRE_COST} € Einstellung, ${STAFF_WAGE} € pro Tag.`, 'build');
+  return next;
+}
+
+/** Gives a staff member a different task. */
+export function setStaffRole(game: GameState, kind: ShopKind, index: number, role: StaffRole): GameState {
+  const shop = game.shops[kind];
+  if (!game.hasChosen || index < 0 || index >= shop.staff || staffRole(shop, index) === role) return game;
+  const next = structuredClone(game);
+  const roles = [...(next.shops[kind].staffRoles || [])];
+  roles[index] = role;
+  next.shops[kind].staffRoles = roles;
+  const roleInfo = STAFF_ROLE_LIST.find(entry => entry.id === role)!;
+  addEvent(next, `Aufgabe geändert`, `Mitarbeiter ${index + 1} ist jetzt für ${roleInfo.label} zuständig: ${roleInfo.description}`, 'info');
+  return next;
+}
+
+/** Enlarges the sales floor: more tiles, same furniture that is already placed. */
+export function expandShop(game: GameState, kind: ShopKind): GameState {
+  const shop = game.shops[kind];
+  const step = nextExpansion(shop);
+  if (!game.hasChosen || !shop.owned || !step || game.coins < step.cost) return game;
+  const next = structuredClone(game);
+  next.coins -= step.cost;
+  next.totalExpenses += step.cost;
+  next.built += 1;
+  next.shops[kind].expansions += 1;
+  next.shops[kind].layout = normalizeLayout(next.shops[kind], next.shops[kind].layout);
+  next.shops[kind].popularity = Math.min(99, next.shops[kind].popularity + 4);
+  addEvent(next, `Ladenfläche erweitert: ${step.label}`, `Zwei Kacheln mehr Verkaufsfläche für ${money(step.cost)}.`, 'build');
+  return next;
+}
+
+/** Turns a small shelf into a tall one: more room and more goods on display. */
+export function upgradeShelf(game: GameState, kind: ShopKind, index: number): GameState {
+  const shop = game.shops[kind];
+  if (!game.hasChosen || !shop.owned || index < 0 || index >= shop.furniture.shelf || shelfTier(shop, index) === 2) return game;
+  const cost = shelfUpgradeCost(shop, index);
+  if (game.coins < cost) return game;
+  const next = structuredClone(game);
+  next.coins -= cost;
+  next.totalExpenses += cost;
+  next.built += 1;
+  const tiers = Array.from({ length: next.shops[kind].furniture.shelf }, (_, position) => shelfTier(next.shops[kind], position));
+  tiers[index] = 2;
+  next.shops[kind].shelfTiers = tiers;
+  next.shops[kind].popularity = Math.min(99, next.shops[kind].popularity + 2);
+  addEvent(next, `Regal ${index + 1} ausgebaut`, `Ein grosses Regal mit ${SHELF_CAPACITY[2]} Lagerplätzen für ${money(cost)}.`, 'build');
+  return next;
+}
+
+/**
+ * The storekeeper keeps production running: buys missing raw materials until
+ * every recipe input is stocked again. Works on the given game object.
+ */
+export function staffRestock(game: GameState, kind: ShopKind): boolean {
+  const shop = game.shops[kind];
+  if (!shop?.owned || !hasRole(shop, 'stock')) return false;
+  const targetQuantity = 12;
+  const reserve = 150;
+  let bought = false;
+  const inputs = [...new Set(SHOPS[kind].recipes.flatMap(recipe => Object.keys(recipe.inputs)))];
+  inputs.forEach(itemId => {
+    const item = getItem(kind, itemId);
+    if (!item) return;
+    const missing = targetQuantity - (shop.stock[itemId] || 0);
+    if (missing <= 0) return;
+    const affordable = Math.floor((game.coins - reserve) / item.price);
+    let quantity = Math.max(0, Math.min(missing, affordable));
+    // Keep the warehouse from overflowing.
+    const room = capacity(shop) - (stockCount(shop) + reservedSpace(kind, shop) - 1);
+    quantity = Math.min(quantity, Math.max(0, room));
+    if (quantity < 1) return;
+    game.coins -= item.price * quantity;
+    game.totalExpenses += item.price * quantity;
+    shop.stock[itemId] = (shop.stock[itemId] || 0) + quantity;
+    bought = true;
+  });
+  if (bought) addEvent(game, 'Lageristin hat nachbestellt', `${shop.name}: Rohstoffe sind wieder aufgefüllt.`, 'info');
+  return bought;
+}
+
+/** How often a cashier serves the next waiting customer, in milliseconds. */
+export const AUTO_SERVE_MS = 3200;
+/** Chance that an automatic sale still earns a tip. */
+export const AUTO_SERVE_TIP_CHANCE = .25;
 
 /** Moves one piece to another tile. Invalid targets leave the game untouched. */
 export function movePlaceable(game: GameState, kind: ShopKind, id: string, place: Placement): GameState {
@@ -87,7 +218,7 @@ export function movePlaceable(game: GameState, kind: ShopKind, id: string, place
   const piece = piecesOf(shop).find(entry => entry.id === id);
   if (!piece || piece.kind !== id.split('-')[0]) return game;
   const target: Placement = { x: Math.round(place.x), y: Math.round(place.y), rot: place.rot === 1 ? 1 : 0 };
-  if (!placementFits(shop.layout, piece.kind, target, id)) return game;
+  if (!placementFits(shop.layout, piece.kind, target, id, gridOf(shop))) return game;
   const current = placeOf(shop.layout, piece);
   if (current.x === target.x && current.y === target.y && current.rot === target.rot) return game;
   const next = structuredClone(game);
@@ -109,7 +240,7 @@ function validSaveShape(input: unknown): input is GameState {
     if (!shop || !Array.isArray(shop.orders)) return false;
     return typeof shop.name === 'string' && shop.name.length >= 2 && shop.name.length <= 22 && typeof shop.owned === 'boolean' && typeof shop.open === 'boolean' &&
       Number.isFinite(shop.popularity) && shop.popularity >= 0 && shop.popularity <= 100 && Number.isFinite(shop.price) && shop.price >= .8 && shop.price <= 1.3 && Number.isFinite(shop.revenue) && Number.isFinite(shop.dailyRevenue) && Number.isFinite(shop.sold) && Number.isFinite(shop.produced) &&
-      Number.isInteger(shop.staff) && shop.staff >= 1 && shop.staff <= 3 && Number.isInteger(shop.skill) && shop.skill >= 0 && shop.skill <= 3 &&
+      Number.isInteger(shop.staff) && shop.staff >= 0 && shop.staff <= 3 && Number.isInteger(shop.skill) && shop.skill >= 0 && shop.skill <= 3 &&
       SHOPS[kind].items.every(item => Number.isFinite(shop.stock?.[item.id]) && shop.stock[item.id] >= 0) &&
       Object.values(shop.stock).every(quantity => Number.isInteger(quantity) && quantity >= 0) &&
       (['register','shelf','decor','workbench'] as FurnitureKind[]).every(key => Number.isInteger(shop.furniture?.[key]) && shop.furniture[key] >= 1 && shop.furniture[key] <= SHOPS[kind].furniture[key].max) &&
@@ -127,7 +258,11 @@ export function addEvent(game: GameState, text: string, detail: string, kind: Ga
   game.events = game.events.slice(0, 16);
 }
 
-export function capacity(shop: Shop) { return 80 + shop.furniture.shelf * 40; }
+export function capacity(shop: Shop) {
+  const shelves = Array.from({ length: shop.furniture.shelf }, (_, index) => shelfTier(shop, index))
+    .reduce((sum, tier) => sum + SHELF_CAPACITY[tier], 0);
+  return 80 + shelves;
+}
 export function stockCount(shop: Shop) { return Object.values(shop.stock).reduce((a, b) => a + b, 0); }
 export function recommendedRecipe(kind: ShopKind) { return SHOPS[kind].recipes[kind === 'tcg' ? 0 : 1].id; }
 
@@ -331,7 +466,7 @@ export function advance(game: GameState, seconds: number): GameState {
     if (next.minute >= 1260) {
       next.day++;
       next.minute = 540;
-      const wages = SHOP_ORDER.filter(k => next.shops[k].owned).reduce((sum, k) => sum + next.shops[k].staff * 120 + 60, 0);
+      const wages = SHOP_ORDER.filter(k => next.shops[k].owned).reduce((sum, k) => sum + next.shops[k].staff * STAFF_WAGE + 60, 0);
       next.coins = Math.max(0, next.coins - wages);
       next.totalExpenses += wages;
       SHOP_ORDER.forEach(k => {
@@ -367,6 +502,13 @@ export function advance(game: GameState, seconds: number): GameState {
       shop.autoRecipes.forEach(recipeId => {
         if (!shop.queue.some(job => job.recipeId === recipeId) && !canProduce(next,kind,recipeId)) queueRecipe(next,kind,recipeId);
       });
+      // The storekeeper refills the raw materials every now and then.
+      if (hasRole(shop, 'stock') && next.elapsed % 20 === 0) staffRestock(next, kind);
+      // A person on shelf duty keeps the sales floor full and the mood up.
+      if (hasRole(shop, 'refill') && shop.open && shop.popularity < 99 && next.elapsed % 300 === 0
+        && SHOPS[kind].items.some(item => item.category === 'product' && (shop.stock[item.id] || 0) > 0)) {
+        shop.popularity = Math.min(99, shop.popularity + 1);
+      }
       const salesInterval = Math.max(4, 11 - shop.furniture.register - Math.floor(shop.popularity / 25));
       if (!shop.open || next.elapsed % salesInterval !== 0) return;
       const card = shop.cards.find(c => c.listed && !c.sold);
