@@ -93,12 +93,13 @@ export function FurniturePreview({ type, kind, shop }: { type: FurnitureKind; ki
     </g>}
   </svg>;
 }
-export function FurnishingView({ game, kind, update }: ViewProps) {
+export function FurnishingView({ game, kind, update, onArrange }: ViewProps & { onArrange?: () => void }) {
   const shop = game.shops[kind];
-  return <div className="management-view furnishing-view"><div className="production-note"><Icon name="sparkles" size={20} /><p>Mehr als nur Möbel: Regale schaffen Lagerplatz, Arbeitsplätze beschleunigen die Herstellung und Extras machen deinen Laden zum Lieblingsort.</p></div><div className="furniture-grid">{(Object.keys(SHOPS[kind].furniture) as FurnitureKind[]).map(type => {
+  return <div className="management-view furnishing-view"><div className="production-note"><Icon name="sparkles" size={20} /><p>Mehr als nur Möbel: Regale schaffen Lagerplatz, Arbeitsplätze beschleunigen die Herstellung und Extras machen deinen Laden zum Lieblingsort.</p></div>
+    {onArrange && <div className="arrange-note"><span className="arrange-icon"><Icon name="move" size={20} /></span><div><h3>Stell deinen Laden um.</h3><p>Kasse, Regale, Arbeitsplätze und Deko lassen sich direkt auf den Kacheln deiner Ladenansicht verschieben und drehen.</p></div><button className="button secondary small" onClick={onArrange}><Icon name="grid" size={14} />Im Laden anordnen</button></div>}<div className="furniture-grid">{(Object.keys(SHOPS[kind].furniture) as FurnitureKind[]).map(type => {
     const item = SHOPS[kind].furniture[type], level=shop.furniture[type], cost=item.cost*level;
     return <div className="furniture-tile" key={type}><div className="furniture-preview" style={{background:SHOPS[kind].light}}><FurniturePreview type={type} kind={kind} shop={shop} /><span>{type === 'register' || type === 'workbench' ? 'Stufe' : 'Anzahl'} {level}/{item.max}</span></div><div className="furniture-info"><span className="eyebrow"><Icon name={furnitureIcons[type]} size={12} />{type === 'register' ? 'KASSE' : type === 'shelf' ? 'REGALE' : type === 'decor' ? 'EXTRAS & ACCESSOIRES' : 'ARBEITSPLATZ'}</span><h3>{item.name}</h3><p>{item.description}</p><button className="button secondary" disabled={level >= item.max || game.coins < cost} onClick={() => update(g => buyFurniture(g,kind,type), `${item.name} steht jetzt in deinem Laden.`)}><Icon name={level >= item.max ? 'check' : 'plus'} size={16} />{level >= item.max ? 'Voll ausgebaut' : type === 'register' ? 'Kasse verbessern' : 'Aufstellen'}{level < item.max && <strong>{money(cost)}</strong>}</button></div></div>;
-  })}</div><p className="inline-note"><Icon name="eye" size={15} />Jede neue Einrichtung wird sofort in deiner isometrischen Ladenansicht sichtbar.</p></div>;
+  })}</div><p className="inline-note"><Icon name="move" size={15} />Jede neue Einrichtung erscheint sofort in deiner Ladenansicht und lässt sich dort frei auf den Kacheln verschieben.</p></div>;
 }
 
 export function StaffView({ game, kind, update }: ViewProps) {

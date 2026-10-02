@@ -2,6 +2,13 @@ export type ShopKind = 'tcg' | 'it' | 'bakery';
 export type Page = 'overview' | 'production' | 'inventory' | 'furnishing' | 'staff' | 'finances' | 'quests';
 export type FurnitureKind = 'register' | 'shelf' | 'decor' | 'workbench';
 
+/** Everything a player can place on the shop floor, tile by tile. */
+export type PlaceableKind = FurnitureKind | 'showcase' | 'center' | 'materials';
+/** A tile position on the shop floor. `rot` 1 swaps width and depth for rotatable pieces. */
+export interface Placement { x: number; y: number; rot: 0 | 1 }
+/** Placement of every movable piece, keyed by `<kind>-<index>`. */
+export type Layout = Record<string, Placement>;
+
 export interface Item {
   id: string;
   name: string;
@@ -69,6 +76,7 @@ export interface Shop {
   autoRecipes: string[];
   dailyRevenue: number;
   hourlyRevenue: number[];
+  layout: Layout;
 }
 
 export interface GameEvent {

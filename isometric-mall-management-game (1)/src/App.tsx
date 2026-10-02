@@ -3,7 +3,7 @@ import type { ChangeEvent, CSSProperties } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'framer-motion';
 import type { GameState, Page, ShopKind, TradingCard } from './game/data';
 import { getItem, money, SHOPS, SHOP_ORDER } from './game/data';
-import { addEvent, advance, enqueue, isValidSave, loadGame, manageCards, newGame, openPack, recommendedRecipe, SAVE_KEY, unlockShop } from './game/engine';
+import { addEvent, advance, enqueue, isValidSave, loadGame, manageCards, newGame, normalizeGame, openPack, recommendedRecipe, SAVE_KEY, unlockShop } from './game/engine';
 import type { VisibleGood } from './game/visualInventory';
 import { Brand, Icon, Modal, ShopIcon } from './components/Ui';
 import { ActivityFeed, GoalPanel, NAV, ShopPanel, Sidebar, WorldPanel } from './components/GamePanels';
@@ -29,6 +29,7 @@ export default function App() {
   const [picker,setPicker]=useState<ShopKind>(game.selected);
   const [mode,setMode]=useState<'shop'|'mall'>('shop');
   const [zoom,setZoom]=useState(1);
+  const [arrange,setArrange]=useState(false);
   const [modal,setModal]=useState<ModalType>(null);
   const [packCards,setPackCards]=useState<TradingCard[]>([]);
   const [productionTab,setProductionTab]=useState<'craft'|'repair'>('craft');
@@ -75,8 +76,11 @@ export default function App() {
     if(!game.hasChosen && next !== 'overview'){notify('Wähle zuerst deinen Startladen. Dann gehört die Mall dir.');return;}
     if(next === 'production')setProductionTab('craft');
     if(next === 'inventory')setInventoryTab('products');
+    if(next !== 'overview')setArrange(false);
     setPage(next);setMobileOpen(false);
   },[game.hasChosen,notify]);
+
+  const arrangeFurniture=useCallback(()=>{setPage('overview');setMode('shop');setZoom(1);setArrange(true);},[]);
 
   const inspectInventory=(good:VisibleGood)=>{
     if(good.type === 'item' && getItem(kind,good.id)?.category === 'intermediate'){
@@ -97,7 +101,7 @@ export default function App() {
     const fresh=newGame(startKind,true);
     fresh.shops[startKind].autoRecipes=[recommendedRecipe(startKind)];
     const started=enqueue(fresh,startKind,recommendedRecipe(startKind));
-    setGame(started);setPending(startKind);setPage('overview');setMode('shop');setZoom(1);setModal(null);
+    setGame(started);setPending(startKind);setPage('overview');setMode('shop');setZoom(1);setArrange(false);setModal(null);
     notify(`${SHOPS[startKind].defaultName} ist geöffnet. Deine Geschichte beginnt!`);
   };
 
@@ -122,7 +126,7 @@ export default function App() {
   };
   const importSave=async(event:ChangeEvent<HTMLInputElement>)=>{
     const file=event.target.files?.[0];if(!file)return;
-    try{const imported:unknown=JSON.parse(await file.text());if(!isValidSave(imported))throw new Error('invalid');setGame({...imported,savedAt:Date.now()});setPending(imported.selected);setPage('overview');closeModal();notify('Dein Spielstand ist wieder da. Willkommen zurück!');}
+    try{const imported:unknown=JSON.parse(await file.text());if(!isValidSave(imported))throw new Error('invalid');setGame(normalizeGame({...imported,savedAt:Date.now()}));setPending(imported.selected);setPage('overview');setArrange(false);closeModal();notify('Dein Spielstand ist wieder da. Willkommen zurück!');}
     catch{notify('Diese Datei ist kein gültiger Mallside-Spielstand.');}event.target.value='';
   };
   const chooseShop=()=>{
@@ -141,10 +145,10 @@ export default function App() {
       <main className="workspace"><div className="page-heading"><div><span className="eyebrow">{copy.eyebrow}</span><h1>{copy.title}</h1><p>{copy.description}</p></div><button className="button secondary header-action" onClick={()=>page !== 'overview' ? goPage('overview') : showModal(game.hasChosen ? 'shops' : 'help')}><Icon name={page !== 'overview' ? 'store' : game.hasChosen ? 'plus' : 'book'} size={16}/>{page !== 'overview' ? 'Zur Ladenansicht' : game.hasChosen ? 'Neuen Laden eröffnen' : 'Spiel entdecken'}{page === 'overview' && game.hasChosen && <Icon name="arrowUp" size={15}/>}</button></div>
         {!game.hasChosen && <button className="mobile-start-prompt" onClick={()=>showModal('shops')}><span><Icon name="store" size={16}/>Wähle deinen ersten Laden</span><Icon name="arrow" size={16}/></button>}
         <div className="content-layout"><div className="main-column"><AnimatePresence mode="wait"><motion.div className="page-content" key={`${page}-${page === 'production' ? productionTab : ''}-${page === 'overview' ? 'world' : kind}`} initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-5}} transition={{duration:.2}}>
-          {page === 'overview' && <><WorldPanel game={game} kind={kind} mode={mode} setMode={setMode} zoom={zoom} setZoom={setZoom} update={update} onNavigate={goPage} onInspectInventory={inspectInventory} onModal={showModal} onSpecial={special} notify={notify}/><ActivityFeed game={game} onMore={()=>showModal('activity')}/></>}
+          {page === 'overview' && <><WorldPanel game={game} kind={kind} mode={mode} setMode={setMode} zoom={zoom} setZoom={setZoom} update={update} onNavigate={goPage} onInspectInventory={inspectInventory} onModal={showModal} onSpecial={special} notify={notify} editLayout={arrange} onEditLayout={setArrange}/><ActivityFeed game={game} onMore={()=>showModal('activity')}/></>}
           {page === 'production' && <ProductionView {...viewProps} initialTab={productionTab}/>}
           {page === 'inventory' && <InventoryView {...viewProps} initialTab={inventoryTab}/>}
-          {page === 'furnishing' && <FurnishingView {...viewProps}/>}
+          {page === 'furnishing' && <FurnishingView {...viewProps} onArrange={arrangeFurniture}/>}
           {page === 'staff' && <StaffView {...viewProps}/>}
           {page === 'finances' && <FinanceView {...viewProps}/>}
           {page === 'quests' && <QuestView {...viewProps}/>}

@@ -750,7 +750,12 @@ kbd { font-family: inherit; font-size: 7px; padding: 3px 5px; border: 1px solid 
 
 @media (max-width: 640px) {
   .world-heading-actions { gap: 5px; }
-  .world-browse, .world-furnish { font-size: 0 !important; padding: 7px !important; width: 29px; min-height: 28px !important; gap: 0; }
+  .world-browse, .world-furnish, .world-arrange { font-size: 0 !important; padding: 7px !important; width: 29px; min-height: 28px !important; gap: 0; }
+  .world-live { letter-spacing: .6px; }
+  .layout-editor-bar { font-size: 7.5px; padding: 6px 8px; gap: 6px; }
+  .layout-editor-bar kbd { display: none; }
+  .arrange-note { flex-wrap: wrap; gap: 10px; }
+  .arrange-note .button { margin-left: 0; }
   .scene-catalog-inner { padding: 14px 12px 18px; }
   .scene-catalog-heading h3 { font-size: 11px; }
   .scene-catalog-list { grid-template-columns: repeat(2,minmax(0,1fr)); max-height: 224px; gap: 5px; }
@@ -989,6 +994,33 @@ kbd { font-family: inherit; font-size: 7px; padding: 3px 5px; border: 1px solid 
   .toast { bottom: 18px; right: 16px; max-width: calc(100vw - 32px); padding: 13px; gap: 9px; }
   .toast p { font-size: 10px; }
 }
+
+/* --- Kachel-Raster, Möbel-Anordnung und laufende Kunden --- */
+.shop-piece.is-editing { cursor: grab; }
+.shop-piece.is-editing:active, .shop-piece.is-dragging { cursor: grabbing; outline: none; }
+.shop-piece.is-editing:focus-visible { outline: none; }
+.piece-marker { fill: #8cb57e26; stroke: #77a068; stroke-width: .9; stroke-dasharray: 3 3; pointer-events: none; }
+.shop-piece.is-dragging { opacity: .93; filter: drop-shadow(0 9px 7px #6d826b55); }
+.layout-grid polyline { fill: none; stroke: #9cb894; stroke-width: .7; opacity: .5; }
+.layout-door { fill: #e8bd7f2e; stroke: #cba063; stroke-width: .9; }
+.layout-ghost.valid { fill: #8cc47e44; stroke: #6d9c5f; stroke-width: 1.3; }
+.layout-ghost.invalid { fill: #d0827099; stroke: #b3604c; stroke-width: 1.3; }
+.iso-scene.is-arranging { touch-action: none; }
+.iso-scene.is-arranging .iso-good { pointer-events: none; }
+.world-stage-right { display: flex; align-items: center; gap: 11px; pointer-events: auto; }
+.world-arrange.active { background: #e7eedf !important; color: #557047 !important; }
+.layout-editor-bar { position: absolute; left: 50%; bottom: 15px; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: 9px; padding: 7px 9px 7px 13px; border-radius: 7px; border: 1px solid #d8e2cc; background: #fbfdf7f0; color: #74896a; font-size: 8.5px; box-shadow: 0 8px 22px #5c715018; pointer-events: auto; max-width: calc(100% - 32px); }
+.layout-editor-bar kbd { font-family: inherit; font-size: 8px; padding: 1px 4px; border: 1px solid #dde5d2; border-radius: 3px; background: #f2f7ed; color: #7c9070; margin: 0 1px; }
+.layout-editor-bar .text-button { font-size: 8.5px; white-space: nowrap; }
+.customer-walker { transition: transform .66s linear; }
+.customer-bob { animation: customer-step .46s ease-in-out infinite; }
+@keyframes customer-step { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.7px); } }
+.simulation-paused .customer-bob { animation-play-state: paused; }
+.arrange-note { display: flex; align-items: center; gap: 13px; padding: 15px 17px; border: 1px dashed #cbdac0; border-radius: 9px; background: #f7faf3; margin-bottom: 19px; }
+.arrange-note .arrange-icon { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; background: #e9f0e0; color: #75925f; flex: none; }
+.arrange-note h3 { font-size: 11.5px; font-weight: 700; color: #66805e; }
+.arrange-note p { margin-top: 5px; font-size: 8.5px; line-height: 1.7; color: #93a186; }
+.arrange-note .button { margin-left: auto; flex: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

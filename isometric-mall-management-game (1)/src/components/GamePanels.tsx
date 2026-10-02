@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { GameState, Page, ShopKind } from '../game/data';
+import type { GameState, Page, Placement, ShopKind } from '../game/data';
 import { clock, getItem, money, RARITY_LABELS, SHOPS, SHOP_ORDER } from '../game/data';
-import { capacity, goalProgress, stockCount } from '../game/engine';
+import { capacity, goalProgress, movePlaceable, stockCount } from '../game/engine';
 import type { VisibleGood } from '../game/visualInventory';
 import { createShopDisplay, displayedQuantity } from '../game/visualInventory';
 import { Brand, Icon, Progress, ShopIcon } from './Ui';
@@ -34,11 +34,12 @@ export function Sidebar({ game, page, onNavigate, onModal, saved, mobileOpen, on
   </aside></>;
 }
 
-export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, onNavigate, onInspectInventory, onModal, onSpecial, notify }: { game:GameState; kind:ShopKind; mode:'shop'|'mall'; setMode:(mode:'shop'|'mall')=>void; zoom:number; setZoom:(zoom:number)=>void; update:UpdateGame; onNavigate:(page:Page)=>void; onInspectInventory:(good:VisibleGood)=>void; onModal:(modal:ModalType)=>void; onSpecial:()=>void; notify:(text:string)=>void }) {
+export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, onNavigate, onInspectInventory, onModal, onSpecial, notify, editLayout, onEditLayout }: { game:GameState; kind:ShopKind; mode:'shop'|'mall'; setMode:(mode:'shop'|'mall')=>void; zoom:number; setZoom:(zoom:number)=>void; update:UpdateGame; onNavigate:(page:Page)=>void; onInspectInventory:(good:VisibleGood)=>void; onModal:(modal:ModalType)=>void; onSpecial:()=>void; notify:(text:string)=>void; editLayout:boolean; onEditLayout:(value:boolean)=>void }) {
   const ref=useRef<HTMLDivElement>(null);
   const [selected,setSelected]=useState<VisibleGood|null>(null);
   const [browse,setBrowse]=useState(false);
   useEffect(()=>{setSelected(null);setBrowse(false);},[kind,mode]);
+  useEffect(()=>{if(mode==='mall' && editLayout)onEditLayout(false);},[mode,editLayout,onEditLayout]);
   const shop=game.shops[kind];
   const display=createShopDisplay(kind,shop);
   const item=selected?.type === 'item' ? getItem(kind,selected.id) : undefined;
@@ -54,9 +55,10 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
   };
   const fullScreen=async()=>{try{if(document.fullscreenElement) await document.exitFullscreen();else await ref.current?.requestFullscreen();}catch{notify('Die Vollbildansicht wird von diesem Browser nicht unterstützt.');}};
   return <div className="world-panel" ref={ref}><div className="world-heading"><button className="world-shop-selector" onClick={()=>onModal('shops')}><span className="world-shop-icon" style={{backgroundColor:SHOPS[kind].light,color:SHOPS[kind].color}}><ShopIcon kind={kind} size={22}/></span><span><strong>{shop.name}</strong><small>{SHOPS[kind].label} <span>·</span> {game.hasChosen ? 'Dein Laden' : 'Deine erste Geschichte'}</small></span><Icon name="down" size={15}/></button><div className="world-heading-actions"><button className={`button secondary small world-browse ${browse ? 'active' : ''}`} disabled={mode==='mall'} aria-label={browse ? 'Warenübersicht schliessen' : 'Warenübersicht öffnen'} title="Warenübersicht" aria-expanded={browse} onClick={()=>setBrowse(open=>!open)}><Icon name="eye" size={15}/>Waren</button><button className="button secondary small world-furnish" disabled={!game.hasChosen} onClick={()=>onNavigate('furnishing')}><Icon name="pencil" size={14}/>Einrichten</button></div></div>
-    <div className="world-stage"><div className="world-stage-toolbar"><div className="world-view-tabs"><button className={mode === 'shop' ? 'active' : ''} onClick={()=>{setMode('shop');setZoom(1);}}><Icon name="store" size={14}/>Ladenansicht</button><button className={mode === 'mall' ? 'active' : ''} onClick={()=>{setMode('mall');setZoom(1);}}><Icon name="grid" size={14}/>Meine Mall</button></div><span className={`world-live ${game.paused ? 'is-paused' : ''}`}><i/>{!game.hasChosen ? 'VORSCHAU' : game.paused ? 'PAUSIERT' : 'DEINE MALL LEBT'}</span></div>
-      <IsoScene game={game} kind={kind} mode={mode} zoom={zoom} onInteract={interact} onInspect={setSelected} selected={selected} onSelect={k=>{if(game.hasChosen)update(g=>({...g,selected:k}));setMode('shop');setZoom(1);}}/>
-      <span className="scene-hint"><Icon name="eye" size={14}/>{mode === 'shop' ? 'Ware anklicken: Produkt und echten Bestand ansehen.' : 'Wähle einen Laden oder eröffne eine neue Fläche.'}</span>
+    <div className="world-stage"><div className="world-stage-toolbar"><div className="world-view-tabs"><button className={mode === 'shop' ? 'active' : ''} onClick={()=>{setMode('shop');setZoom(1);}}><Icon name="store" size={14}/>Ladenansicht</button><button className={mode === 'mall' ? 'active' : ''} onClick={()=>{setMode('mall');setZoom(1);}}><Icon name="grid" size={14}/>Meine Mall</button></div><div className="world-stage-right"><button className={`button secondary small world-arrange ${editLayout ? 'active' : ''}`} disabled={!game.hasChosen || mode === 'mall'} aria-pressed={editLayout} title="Möbel auf den Kacheln verschieben" onClick={()=>{if(mode !== 'shop')setMode('shop');onEditLayout(!editLayout);}}><Icon name={editLayout ? 'check' : 'move'} size={14}/>{editLayout ? 'Fertig' : 'Anordnen'}</button><span className={`world-live ${game.paused ? 'is-paused' : ''}`}><i/>{!game.hasChosen ? 'VORSCHAU' : game.paused ? 'PAUSIERT' : 'DEINE MALL LEBT'}</span></div></div>
+      <IsoScene game={game} kind={kind} mode={mode} zoom={zoom} editing={editLayout && mode === 'shop'} onInteract={interact} onInspect={setSelected} onMove={(id:string,place:Placement)=>update(g=>movePlaceable(g,kind,id,place))} selected={selected} onSelect={k=>{if(game.hasChosen)update(g=>({...g,selected:k}));setMode('shop');setZoom(1);}}/>
+      <span className="scene-hint"><Icon name={editLayout ? 'move' : 'eye'} size={14}/>{editLayout ? 'Möbel ziehen: Pfeiltasten bewegen, R dreht, freie Kacheln sind grün.' : mode === 'shop' ? 'Ware anklicken: Produkt und echten Bestand ansehen.' : 'Wähle einen Laden oder eröffne eine neue Fläche.'}</span>
+      {editLayout && mode === 'shop' && <div className="layout-editor-bar"><Icon name="move" size={15}/><span>Ziehe Möbel auf eine freie Kachel. <kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd> bewegen, <kbd>R</kbd> dreht.</span><button className="text-button" onClick={()=>onEditLayout(false)}>Fertig</button></div>}
       <div className="camera-controls"><button className="icon-button" onClick={()=>setZoom(Math.min(1.5,Math.round((zoom+.1)*10)/10))} disabled={zoom >= 1.5} aria-label="Ansicht vergrössern"><Icon name="plus" size={17}/></button><button className="icon-button" onClick={()=>setZoom(Math.max(.7,Math.round((zoom-.1)*10)/10))} disabled={zoom <= .7} aria-label="Ansicht verkleinern"><Icon name="minus" size={17}/></button><span/><button className="icon-button" onClick={()=>setZoom(1)} aria-label="Ansicht zurücksetzen"><Icon name="reset" size={16}/></button><button className="icon-button" onClick={fullScreen} aria-label="Vollbildansicht"><Icon name="maximize" size={16}/></button></div>
     </div><AnimatePresence>{browse && <motion.div className="scene-catalog" initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} transition={{duration:.22}}>
       <div className="scene-catalog-inner"><div className="scene-catalog-heading"><div><h3>Was steht in deinem Laden?</h3><p>Jedes Stück in der Szene stammt aus deinem Bestand.</p></div><button className="icon-button" aria-label="Warenübersicht schliessen" onClick={()=>setBrowse(false)}><Icon name="x" size={16}/></button></div>

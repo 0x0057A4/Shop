@@ -1,5 +1,6 @@
 import { CARD_NAMES, SHOPS, SHOP_ORDER, clock, getItem } from './data';
-import type { FurnitureKind, GameState, RepairOrder, Shop, ShopKind, TradingCard } from './data';
+import type { FurnitureKind, GameState, Placement, RepairOrder, Shop, ShopKind, TradingCard } from './data';
+import { normalizeLayout, piecesOf, placementFits, placeOf } from './layout';
 
 export const SAVE_KEY = 'mallside-save-v1';
 const id = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -13,12 +14,15 @@ export function makeOrders(): RepairOrder[] {
 }
 
 function makeShop(kind: ShopKind): Shop {
-  return {
+  const shop: Shop = {
     owned: kind === 'tcg', name: SHOPS[kind].defaultName, popularity: 42,
     stock: { ...SHOPS[kind].starterStock }, furniture: { register: 1, shelf: 2, decor: 1, workbench: 1 },
     queue: [], cards: [], orders: kind === 'it' ? makeOrders() : [], staff: 1, skill: 0,
     price: 1, open: true, revenue: 0, sold: 0, produced: 0, autoRecipes: [], dailyRevenue: 0, hourlyRevenue: Array(12).fill(0),
+    layout: {},
   };
+  shop.layout = normalizeLayout(shop);
+  return shop;
 }
 
 export function newGame(kind: ShopKind = 'tcg', chosen = false): GameState {
@@ -46,6 +50,7 @@ export function loadGame(): GameState {
         }
       });
       if (isValidSave(save)) {
+        normalizeGame(save);
         const away = Math.max(0, Math.min(300, Math.floor((Date.now() - save.savedAt) / 1000)));
         const progressed = advance(save, away * save.speed);
         if (away >= 15 && save.hasChosen && !save.paused) addEvent(progressed, 'Schön, dass du wieder da bist.', `Dein Team hat ${away} Sekunden im Hintergrund weitergearbeitet.`);
@@ -60,6 +65,33 @@ export function loadGame(): GameState {
 export function isValidSave(input: unknown): input is GameState {
   try { return validSaveShape(input); }
   catch { return false; }
+}
+
+/**
+ * Makes a loaded or imported save playable: fills in missing furniture positions
+ * and repairs arrangements that no longer fit the current shop floor.
+ */
+export function normalizeGame(game: GameState): GameState {
+  SHOP_ORDER.forEach(kind => {
+    const shop = game.shops?.[kind];
+    if (!shop) return;
+    shop.layout = normalizeLayout(shop, shop.layout);
+  });
+  return game;
+}
+
+/** Moves one piece to another tile. Invalid targets leave the game untouched. */
+export function movePlaceable(game: GameState, kind: ShopKind, id: string, place: Placement): GameState {
+  const shop = game.shops[kind];
+  const piece = piecesOf(shop).find(entry => entry.id === id);
+  if (!piece || piece.kind !== id.split('-')[0]) return game;
+  const target: Placement = { x: Math.round(place.x), y: Math.round(place.y), rot: place.rot === 1 ? 1 : 0 };
+  if (!placementFits(shop.layout, piece.kind, target, id)) return game;
+  const current = placeOf(shop.layout, piece);
+  if (current.x === target.x && current.y === target.y && current.rot === target.rot) return game;
+  const next = structuredClone(game);
+  next.shops[kind].layout[id] = target;
+  return next;
 }
 
 function validSaveShape(input: unknown): input is GameState {
@@ -84,6 +116,7 @@ function validSaveShape(input: unknown): input is GameState {
       Array.isArray(shop.cards) && shop.cards.every(card => card && typeof card.id === 'string' && typeof card.name === 'string' && typeof card.listed === 'boolean' && typeof card.sold === 'boolean' && Number.isFinite(card.value) && card.value >= 0 && ['Gewoehnlich','Selten','Episch','Legendaer'].includes(card.rarity) && ['fire','forest','water','crystal','moon'].includes(card.element)) &&
       shop.orders.every(order => order && typeof order.id === 'string' && typeof order.device === 'string' && typeof order.problem === 'string' && Number.isFinite(order.reward) && Number.isFinite(order.duration) && Number.isFinite(order.chips) && ['available','queued','done'].includes(order.status)) &&
       Array.isArray(shop.autoRecipes) && shop.autoRecipes.every(recipeId => SHOPS[kind].recipes.some(r => r.id === recipeId)) &&
+      (shop.layout === undefined || (typeof shop.layout === 'object' && shop.layout !== null && !Array.isArray(shop.layout))) &&
       Array.isArray(shop.hourlyRevenue) && shop.hourlyRevenue.length === 12 && shop.hourlyRevenue.every(Number.isFinite);
   }) && (!value.hasChosen || value.shops[value.selected].owned);
 }
@@ -193,6 +226,7 @@ export function buyFurniture(game: GameState, kind: ShopKind, furniture: Furnitu
   next.totalExpenses += cost;
   next.built++;
   next.shops[kind].furniture[furniture]++;
+  next.shops[kind].layout = normalizeLayout(next.shops[kind], next.shops[kind].layout);
   next.shops[kind].popularity = Math.min(99, next.shops[kind].popularity + (furniture === 'decor' ? 6 : 3));
   addEvent(next, `${config.name} aufgestellt`, 'Dein Laden ist jetzt noch ein bisschen besser.', 'build');
   return next;
