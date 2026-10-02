@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import type { FurnitureKind, GameState, Recipe, ShopKind } from '../game/data';
-import { SHELF_CAPACITY, STAFF_HIRE_COST, STAFF_WAGE, getItem, money, number, RARITY_LABELS, SHOPS, SHOP_ORDER } from '../game/data';
-import { STAFF_ROLE_LIST, addEvent, buyFurniture, buyMaterial, cancelJob, canBuyMaterial, canProduce, capacity, enqueue, expandShop, goalProgress, hireStaff, makeOrders, manageCards, nextExpansion, reservedSpace, rolesOf, sellStock, setStaffRole, shelfTierCount, shelfUpgradeCost, startRepair, stockCount, upgradeShelf } from '../game/engine';
+import { FLOOR_COLORS, SHELF_CAPACITY, STAFF_HIRE_COST, STAFF_WAGE, WALL_COLORS, getItem, money, number, RARITY_LABELS, SHOPS, SHOP_ORDER } from '../game/data';
+import { STAFF_ROLE_LIST, addEvent, buyFurniture, buyMaterial, cancelJob, canBuyMaterial, canProduce, capacity, enqueue, expandShop, goalProgress, hireStaff, makeOrders, manageCards, nextExpansion, reservedSpace, rolesOf, sellStock, setStaffRole, shelfTierCount, shelfUpgradeCost, startRepair, stockCount, upgradeShelf, colorName, setShopColor } from '../game/engine';
 import { createShopDisplay, SHELF_SLOTS, shelfTierOf } from '../game/visualInventory';
 import { gridOf, piecesOf, placeOf } from '../game/layout';
 import { CreatureArt } from './Cards';
@@ -109,6 +109,23 @@ export function FurnishingView({ game, kind, update, onArrange }: ViewProps & { 
         <span className="expansion-size"><Icon name="grid" size={13}/>{gridSize.w} × {gridSize.h} Kacheln · Ausbaustufe {shop.expansions}/2</span>
       </div>
       <button className="button primary" disabled={!expansion || game.coins < expansion.cost} onClick={()=>update(g=>expandShop(g,kind),'Deine Verkaufsfläche ist gewachsen!')}>{expansion ? <><Icon name="expand" size={16}/>Erweitern · {money(expansion.cost)}</> : 'Voll ausgebaut'}</button>
+    </section>
+    <section className="color-picker-card">
+      <div className="section-title"><h3>Farben für deinen Laden</h3><span>{colorName('wall', shop.colors.wall)} &amp; {colorName('floor', shop.colors.floor)}</span></div>
+      <p className="section-intro">Wähle die Farbe der Wände und des Verkaufsraums. Zwei Farben, unendlich viele Stimmungen – die Auslage und alle Möbel bleiben wie sie sind.</p>
+      <div className="color-part">
+        <div className="color-part-head"><Icon name="store" size={14}/><h4>Wandfarbe</h4><span>Wände, Fensterrahmen und Fassade</span></div>
+        <div className="color-row" role="group" aria-label="Wandfarbe wählen">
+          {WALL_COLORS.map(color => <button key={color.id} type="button" className={`color-swatch ${shop.colors.wall.toLowerCase() === color.value.toLowerCase() ? 'active' : ''}`} style={{background: color.value}} title={color.label} aria-label={`Wand in ${color.label}`} aria-pressed={shop.colors.wall.toLowerCase() === color.value.toLowerCase()} onClick={()=>update(g=>setShopColor(g,kind,'wall',color.value),`Die Wände sind jetzt ${color.label}.`)} />)}
+        </div>
+      </div>
+      <div className="color-part">
+        <div className="color-part-head"><Icon name="grid" size={14}/><h4>Bodenfarbe</h4><span>Kacheln und Sockel des Verkaufsraums</span></div>
+        <div className="color-row" role="group" aria-label="Bodenfarbe wählen">
+          {FLOOR_COLORS.map(color => <button key={color.id} type="button" className={`color-swatch ${shop.colors.floor.toLowerCase() === color.value.toLowerCase() ? 'active' : ''}`} style={{background: color.value}} title={color.label} aria-label={`Boden in ${color.label}`} aria-pressed={shop.colors.floor.toLowerCase() === color.value.toLowerCase()} onClick={()=>update(g=>setShopColor(g,kind,'floor',color.value),`Der Boden liegt jetzt in ${color.label}.`)} />)}
+        </div>
+        <div className="color-preview"><span className="color-preview-bar"><i style={{background: shop.colors.wall}} /><i style={{background: shop.colors.floor}} /></span>So sieht die Kombination im Laden aus. Änderungen siehst du sofort in der Ladenansicht.</div>
+      </div>
     </section>
     <section className="shelf-upgrade-card">
       <div className="section-title"><h3>Regale ausbauen</h3><span>{largeShelves}/{shop.furniture.shelf} grosse Regale · {capacity(shop)} Lagerplätze</span></div>

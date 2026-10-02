@@ -32,7 +32,8 @@ const KEY_DIRECTIONS: Record<string, PlayerFacing> = {
 export function findSpawnTile(shop: Shop): Tile {
   const blocked = blockedTiles(shop.layout);
   const grid = gridOf(shop);
-  const start: Tile = { x: 7, y: 5 };
+  // Right behind the entrance, which always sits in the last row of tiles.
+  const start: Tile = { x: 7, y: Math.max(0, grid.h - 2) };
   if (isWalkable(start, blocked, grid)) return start;
   const queue: Tile[] = [start];
   const seen = new Set([`${start.x},${start.y}`]);

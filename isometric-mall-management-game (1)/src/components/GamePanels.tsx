@@ -15,7 +15,7 @@ import { PLAYER_STEP_MS, usePlayer } from './Player';
 import type { PlayerFacing } from './Player';
 import { serviceQueues } from '../game/services';
 import type { QueueCustomer } from '../game/services';
-import { PLACE_LABELS, blockedTiles, freeSides, piecesOf, placeOf, rotatable } from '../game/layout';
+import { PLACE_LABELS, blockedTiles, freeSides, gridOf, piecesOf, placeOf, rotatable } from '../game/layout';
 import { RegisterGame } from './RegisterGame';
 import { GoodPortrait } from './IsoGoods';
 import type { UpdateGame } from './ManagementViews';
@@ -62,7 +62,7 @@ export function WorldPanel({ game, kind, mode, setMode, zoom, setZoom, update, o
   const blockedSet=blockedTiles(shop.layout);
   const services=serviceQueues(kind,shop,blockedSet);
   const nearby=mode === 'shop' && game.hasChosen ? services.find(entry => {
-    const tiles=[...freeSides(entry.info.place,entry.info.kind,blockedSet),...entry.spots];
+    const tiles=[...freeSides(entry.info.place,entry.info.kind,blockedSet,gridOf(shop)),...entry.spots];
     return tiles.some(tile => Math.abs(tile.x - player.tile.x) <= 1 && Math.abs(tile.y - player.tile.y) <= 1);
   }) : undefined;
   const waiting=nearby ? crowd.waiting(nearby.info.id) : 0;

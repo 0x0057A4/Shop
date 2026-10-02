@@ -1,5 +1,5 @@
-import { CARD_NAMES, SHELF_CAPACITY, SHELF_UPGRADE_COST, SHOPS, SHOP_EXPANSIONS, SHOP_ORDER, STAFF_HIRE_COST, STAFF_WAGE, clock, getItem, money } from './data';
-import type { FurnitureKind, GameState, Placement, RepairOrder, ShelfTier, Shop, ShopKind, StaffRole, TradingCard } from './data';
+import { CARD_NAMES, DEFAULT_SHOP_COLORS, FLOOR_COLORS, SHELF_CAPACITY, SHELF_UPGRADE_COST, SHOPS, SHOP_EXPANSIONS, SHOP_ORDER, STAFF_HIRE_COST, STAFF_WAGE, WALL_COLORS, clock, expansionTiles, floorGridFor, getItem, money } from './data';
+import type { FurnitureKind, GameState, Placement, RepairOrder, ShelfTier, Shop, ShopColorPart, ShopColors, ShopKind, StaffRole, Theme, TradingCard } from './data';
 import { gridOf, normalizeLayout, piecesOf, placementFits, placeOf } from './layout';
 import type { QueueCustomer } from './services';
 
@@ -24,6 +24,7 @@ function makeShop(kind: ShopKind): Shop {
     staffRoles: [],
     expansions: 0,
     shelfTiers: Array.from({ length: 2 }, () => 1 as ShelfTier),
+    colors: { ...DEFAULT_SHOP_COLORS[kind] },
   };
   shop.layout = normalizeLayout(shop);
   return shop;
@@ -34,7 +35,7 @@ export function newGame(kind: ShopKind = 'tcg', chosen = false): GameState {
   SHOP_ORDER.forEach(k => { shops[k].owned = k === kind; });
   return {
     version: 1, hasChosen: chosen, selected: kind, coins: 12480, day: 1, minute: 540,
-    elapsed: 0, speed: 1, paused: false, sound: false, shops,
+    elapsed: 0, speed: 1, paused: false, sound: false, theme: 'light', shops,
     events: [{ id: id(), text: chosen ? `${SHOPS[kind].defaultName} hat geöffnet` : 'Ein neuer Anfang', detail: chosen ? 'Dein Einkaufsimperium beginnt genau hier.' : 'Deine erste Ladenfläche wartet auf dich.', kind: 'info', time: '09:00' }],
     totalRevenue: 0, totalExpenses: 0, totalSold: 0, opened: 0, built: 0,
     completedProductions: 0, repaired: 0, goalClaimed: false, savedAt: Date.now(),
@@ -53,9 +54,11 @@ export function loadGame(): GameState {
           save.shops[kind].expansions ??= 0;
           save.shops[kind].staffRoles ??= Array.from({ length: save.shops[kind].staff || 0 }, () => 'register' as StaffRole);
           save.shops[kind].shelfTiers ??= Array.from({ length: save.shops[kind].furniture?.shelf || 0 }, () => 1 as ShelfTier);
+          save.shops[kind].colors = { ...DEFAULT_SHOP_COLORS[kind], ...(save.shops[kind].colors || {}) };
           SHOPS[kind].items.forEach(item => { save.shops[kind].stock[item.id] ??= SHOPS[kind].starterStock[item.id] || 0; });
         }
       });
+      save.theme = save.theme === 'dark' ? 'dark' : 'light';
       if (isValidSave(save)) {
         normalizeGame(save);
         const away = Math.max(0, Math.min(300, Math.floor((Date.now() - save.savedAt) / 1000)));
@@ -91,6 +94,8 @@ export const rolesOf = (shop: Shop) => Array.from({ length: shop.staff }, (_, in
 export const shelfTier = (shop: Shop, index: number): ShelfTier => (shop.shelfTiers?.[index] === 2 ? 2 : 1);
 export const shelfTierCount = (shop: Shop, tier: ShelfTier) => Array.from({ length: shop.furniture.shelf }, (_, index) => shelfTier(shop, index)).filter(value => value === tier).length;
 export const expansionStep = (shop: Shop) => SHOP_EXPANSIONS[Math.min(shop.expansions || 0, SHOP_EXPANSIONS.length - 1)];
+/** The floor of a shop as text, e.g. "12 × 8 Kacheln". */
+export const floorLabel = (shop: Shop) => { const grid = floorGridFor(shop.expansions || 0); return `${grid.w} × ${grid.h} Kacheln`; };
 export const nextExpansion = (shop: Shop) => (shop.expansions || 0) < SHOP_EXPANSIONS.length ? SHOP_EXPANSIONS[shop.expansions || 0] : null;
 export const shelfUpgradeCost = (shop: Shop, index: number) => SHELF_UPGRADE_COST + 250 * shelfTierCount(shop, 2) + 250 * index;
 
@@ -102,6 +107,41 @@ export function normalizeShop(shop: Shop) {
   shop.staffRoles = Array.from({ length: shop.staff }, (_, index) => STAFF_ROLE_LIST.some(role => role.id === savedRoles[index]) ? savedRoles[index] as StaffRole : 'register');
   const tiers = Array.isArray(shop.shelfTiers) ? shop.shelfTiers : [];
   shop.shelfTiers = Array.from({ length: shop.furniture.shelf }, (_, index) => (tiers[index] === 2 ? 2 : 1) as ShelfTier);
+  shop.colors = normalizeColors(shop.colors);
+}
+
+const isHex = (value: unknown): value is string => typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
+/** Falls back to the shop's default colours when a save contains nonsense. */
+export function normalizeColors(colors: Partial<ShopColors> | undefined, fallback: ShopColors = DEFAULT_SHOP_COLORS.tcg): ShopColors {
+  return {
+    wall: isHex(colors?.wall) ? colors!.wall : fallback.wall,
+    floor: isHex(colors?.floor) ? colors!.floor : fallback.floor,
+  };
+}
+
+/** Every colour the player can pick for walls or floor. */
+export const colorChoices = (part: ShopColorPart) => part === 'wall' ? WALL_COLORS : FLOOR_COLORS;
+
+/** Looking for the pretty name of a colour choice. */
+export const colorName = (part: ShopColorPart, value: string) =>
+  colorChoices(part).find(entry => entry.value.toLowerCase() === value.toLowerCase())?.label || 'Eigene Farbe';
+
+/** Repaints the walls or the floor of a shop. */
+export function setShopColor(game: GameState, kind: ShopKind, part: ShopColorPart, value: string): GameState {
+  const shop = game.shops[kind];
+  if (!isHex(value) || shop.colors?.[part] === value) return game;
+  if (!colorChoices(part).some(entry => entry.value.toLowerCase() === value.toLowerCase())) return game;
+  const next = structuredClone(game);
+  next.shops[kind].colors = { ...normalizeColors(next.shops[kind].colors, DEFAULT_SHOP_COLORS[kind]), [part]: value };
+  const label = colorName(part, value);
+  addEvent(next, part === 'wall' ? `Wände in ${label}` : `Boden in ${label}`, part === 'wall' ? 'Dein Laden hat einen neuen Anstrich bekommen.' : 'Der Verkaufsraum liegt in einer neuen Farbe.', 'build');
+  return next;
+}
+
+/** Switches the whole interface between light and dark. */
+export function setTheme(game: GameState, theme: Theme): GameState {
+  if (game.theme === theme) return game;
+  return { ...game, theme };
 }
 
 export function normalizeGame(game: GameState): GameState {
@@ -152,9 +192,13 @@ export function expandShop(game: GameState, kind: ShopKind): GameState {
   next.totalExpenses += step.cost;
   next.built += 1;
   next.shops[kind].expansions += 1;
+  // New tiles can push the entrance one row further to the front, so the
+  // furniture is laid out again against the bigger floor.
   next.shops[kind].layout = normalizeLayout(next.shops[kind], next.shops[kind].layout);
   next.shops[kind].popularity = Math.min(99, next.shops[kind].popularity + 4);
-  addEvent(next, `Ladenfläche erweitert: ${step.label}`, `Zwei Kacheln mehr Verkaufsfläche für ${money(step.cost)}.`, 'build');
+  const level = next.shops[kind].expansions;
+  const grid = floorGridFor(level);
+  addEvent(next, `Ladenfläche erweitert: ${step.label}`, `${expansionTiles(level - 1)} Kacheln mehr für ${money(step.cost)} – jetzt ${grid.w} × ${grid.h} Kacheln.`, 'build');
   return next;
 }
 

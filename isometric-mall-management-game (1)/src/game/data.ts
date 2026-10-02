@@ -5,6 +5,11 @@ export type FurnitureKind = 'register' | 'shelf' | 'decor' | 'workbench';
 export type StaffRole = 'register' | 'stock' | 'refill';
 /** 1 = small half-height shelf, 2 = tall shelf with more room. */
 export type ShelfTier = 1 | 2;
+/** Light or dark look of the whole interface. */
+export type Theme = 'light' | 'dark';
+/** The two colours of a shop: the walls and the sales floor. */
+export type ShopColorPart = 'wall' | 'floor';
+export interface ShopColors { wall: string; floor: string }
 
 /** Everything a player can place on the shop floor, tile by tile. */
 export type PlaceableKind = FurnitureKind | 'showcase' | 'center' | 'materials';
@@ -87,6 +92,8 @@ export interface Shop {
   expansions: number;
   /** Upgrade level of every shelf, one entry per shelf: 1 = small, 2 = tall. */
   shelfTiers: ShelfTier[];
+  /** Chosen wall and floor colour of this shop. */
+  colors: ShopColors;
 }
 
 export interface GameEvent {
@@ -118,13 +125,68 @@ export interface GameState {
   completedProductions: number;
   repaired: number;
   goalClaimed: boolean;
+  /** Light or dark interface; saved with the game. */
+  theme: Theme;
   savedAt: number;
 }
 
-/** Price of the first and second enlargement of a sales floor. */
+/**
+ * Every enlargement of a sales floor: `width` and `depth` are the tiles added
+ * to the right side and to the front of the shop.
+ * 9 × 7 → 12 × 8 → 15 × 10 → 18 × 12 tiles.
+ */
 export const SHOP_EXPANSIONS = [
-  { cost: 1800, width: 2, label: 'Seitenflügel' },
-  { cost: 4200, width: 2, label: 'Grosse Halle' },
+  { cost: 1800, width: 3, depth: 1, label: 'Seitenflügel' },
+  { cost: 4200, width: 3, depth: 2, label: 'Grosse Halle' },
+  { cost: 7800, width: 3, depth: 2, label: 'Mallflügel' },
+];
+/** The sales floor of a brand new shop. */
+export const BASE_FLOOR = { w: 9, h: 7 };
+/** Size of the sales floor at a given enlargement level (0 = base). */
+export function floorGridFor(level: number) {
+  const steps = SHOP_EXPANSIONS.slice(0, Math.max(0, Math.min(SHOP_EXPANSIONS.length, Math.floor(level || 0))));
+  return {
+    w: BASE_FLOOR.w + steps.reduce((sum, step) => sum + step.width, 0),
+    h: BASE_FLOOR.h + steps.reduce((sum, step) => sum + step.depth, 0),
+  };
+}
+/** How many tiles one enlargement step adds to the floor. */
+export function expansionTiles(level: number) {
+  const before = floorGridFor(level);
+  const after = floorGridFor(level + 1);
+  return after.w * after.h - before.w * before.h;
+}
+/** Default colours of a shop: wall first, floor second. */
+export const DEFAULT_SHOP_COLORS: Record<ShopKind, ShopColors> = {
+  tcg: { wall: '#c3afe2', floor: '#eee8f1' },
+  it: { wall: '#b1cddc', floor: '#e9f0f2' },
+  bakery: { wall: '#e6c9aa', floor: '#f2ebdf' },
+};
+/** Wall colours the player can choose from. */
+export const WALL_COLORS = [
+  { id: 'lavendel', label: 'Lavendel', value: '#c3afe2' },
+  { id: 'himmelblau', label: 'Himmelblau', value: '#b1cddc' },
+  { id: 'sand', label: 'Sand', value: '#e6c9aa' },
+  { id: 'minze', label: 'Minze', value: '#a9cfc0' },
+  { id: 'rosé', label: 'Rosé', value: '#e2b3bd' },
+  { id: 'koralle', label: 'Koralle', value: '#e9b193' },
+  { id: 'pistazie', label: 'Pistazie', value: '#c8d6a6' },
+  { id: 'taubenblau', label: 'Taubenblau', value: '#b3bdd6' },
+  { id: 'lachs', label: 'Lachs', value: '#ddb9a4' },
+  { id: 'salbei', label: 'Salbei', value: '#b6c7b4' },
+];
+/** Floor colours the player can choose from. */
+export const FLOOR_COLORS = [
+  { id: 'fliederweiss', label: 'Fliederweiss', value: '#eee8f1' },
+  { id: 'eisblau', label: 'Eisblau', value: '#e9f0f2' },
+  { id: 'creme', label: 'Creme', value: '#f2ebdf' },
+  { id: 'mintcreme', label: 'Mintcreme', value: '#e8f1ea' },
+  { id: 'rosenweiss', label: 'Rosenweiss', value: '#f6ecef' },
+  { id: 'nebelgrau', label: 'Nebelgrau', value: '#ecedf2' },
+  { id: 'honig', label: 'Honig', value: '#f6f0e0' },
+  { id: 'aquamarin', label: 'Aquamarin', value: '#e6f2f1' },
+  { id: 'waldbeere', label: 'Waldbeere', value: '#f2e9f2' },
+  { id: 'zement', label: 'Zement', value: '#eceae6' },
 ];
 /** Price of turning one small shelf into a tall one. */
 export const SHELF_UPGRADE_COST = 850;

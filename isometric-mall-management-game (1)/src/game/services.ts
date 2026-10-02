@@ -64,7 +64,7 @@ export function servicePieces(kind: ShopKind, shop: Shop): ServiceInfo[] {
  * spot is right in front of the piece, the rest follow the free floor.
  */
 export function queueSpots(info: ServiceInfo, blocked: Set<string>, count = QUEUE_LENGTH, grid: Grid = BASE_GRID): Tile[] {
-  const sides = freeSides(info.place, info.kind, blocked);
+  const sides = freeSides(info.place, info.kind, blocked, grid);
   if (!sides.length) return [];
   const size = footprint(info.kind, info.place.rot);
   const center = info.place.x + size.w / 2 + info.place.y + size.d / 2;

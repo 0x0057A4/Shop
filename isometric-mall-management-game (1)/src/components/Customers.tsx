@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import type { Shop, ShopKind } from '../game/data';
 import type { ShopDisplay } from '../game/visualInventory';
 import type { Tile } from '../game/layout';
-import { DOOR_TILES, blockedTiles, findPath, footprint, freeSides, gridOf, isWalkable, piecesOf, placeOf } from '../game/layout';
+import { blockedTiles, doorTiles, findPath, footprint, freeSides, gridOf, isWalkable, piecesOf, placeOf } from '../game/layout';
 import type { Grid } from '../game/layout';
 import type { QueueCustomer } from '../game/services';
 import { makeCustomer, serviceQueues } from '../game/services';
@@ -51,6 +51,7 @@ interface CrowdContext {
 /** Everything the customers need to know about the current shop. */
 export function crowdContext(kind: ShopKind, shop: Shop, display: ShopDisplay): CrowdContext {
   const blocked = blockedTiles(shop.layout);
+  const grid = gridOf(shop);
   const browse: Tile[] = [];
   piecesOf(shop).forEach(piece => {
     if (piece.kind === 'register') return;
@@ -58,14 +59,14 @@ export function crowdContext(kind: ShopKind, shop: Shop, display: ShopDisplay): 
     const size = footprint(piece.kind, place.rot);
     const centerDepth = place.x + size.w / 2 + place.y + size.d / 2;
     // Customers always approach a piece from the front, never from behind it.
-    const spots = freeSides(place, piece.kind, blocked).filter(tile => tile.x + tile.y >= centerDepth);
+    const spots = freeSides(place, piece.kind, blocked, grid).filter(tile => tile.x + tile.y >= centerDepth);
     if (!spots.length) return;
     const appeal = piece.kind === 'shelf'
       ? ((display.shelves[piece.index] || []).length ? 3 : 0)
       : piece.kind === 'showcase' || piece.kind === 'center' || piece.kind === 'materials' ? 3 : 1;
     for (let i = 0; i < appeal; i++) browse.push(...spots);
   });
-  return { blocked, grid: gridOf(shop), browse, services: serviceQueues(kind, shop, blocked), doors: DOOR_TILES.map(door => ({ ...door })) };
+  return { blocked, grid, browse, services: serviceQueues(kind, shop, blocked), doors: doorTiles(grid) };
 }
 
 function pick<T>(list: T[]): T | undefined {

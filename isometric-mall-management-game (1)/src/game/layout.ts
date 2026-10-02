@@ -1,25 +1,30 @@
 import type { FurnitureKind, Layout, PlaceableKind, Placement, Shop } from './data';
-import { SHOP_EXPANSIONS } from './data';
+import { BASE_FLOOR, floorGridFor } from './data';
 
 export interface Tile { x: number; y: number }
 
 /** The shop floor is a fixed grid of 9 × 7 tiles. */
-export const GRID_W = 9;
-export const GRID_H = 7;
+export const GRID_W = BASE_FLOOR.w;
+export const GRID_H = BASE_FLOOR.h;
 /** The floor tiles are drawn slightly above the base of the shop. */
 export const FLOOR_Z = 0.37;
-/** Tiles in front of the entrance. Customers walk in and out here. */
-export const DOOR_TILES: Tile[] = [{ x: 7, y: 6 }, { x: 8, y: 6 }];
-
 export interface Grid { w: number; h: number }
+
+/** The entrance always sits at the front of the shop, in the last row of tiles. */
+export const DOOR_X = [7, 8];
+export function doorTiles(grid: Grid = { w: GRID_W, h: GRID_H }): Tile[] {
+  const y = grid.h - 1;
+  return DOOR_X.map(x => ({ x, y }));
+}
+/** Tiles in front of the entrance of the smallest shop. */
+export const DOOR_TILES: Tile[] = doorTiles({ w: GRID_W, h: GRID_H });
 
 /** The smallest sales floor. */
 export const BASE_GRID: Grid = { w: GRID_W, h: GRID_H };
 
-/** Every enlargement adds tiles to the right of the floor. */
+/** Every enlargement adds tiles to the right and to the front of the floor. */
 export function gridFor(expansions: number): Grid {
-  const level = Math.max(0, Math.min(SHOP_EXPANSIONS.length, Math.floor(expansions || 0)));
-  return { w: GRID_W + SHOP_EXPANSIONS.slice(0, level).reduce((sum, step) => sum + step.width, 0), h: GRID_H };
+  return floorGridFor(expansions || 0);
 }
 
 /** The sales floor of a shop, including its enlargements. */
@@ -74,7 +79,7 @@ const DEFAULTS: Record<string, Placement> = {
 };
 
 export const tileKey = (tile: Tile) => `${tile.x},${tile.y}`;
-export const isDoorTile = (tile: Tile) => DOOR_TILES.some(door => door.x === tile.x && door.y === tile.y);
+export const isDoorTile = (tile: Tile, grid: Grid = BASE_GRID) => doorTiles(grid).some(door => door.x === tile.x && door.y === tile.y);
 export const rotatable = (kind: PlaceableKind) => ROTATABLE.includes(kind);
 
 export function pieceCount(shop: Shop, kind: PlaceableKind): number {
@@ -125,7 +130,7 @@ export function occupiedTiles(layout: Layout, exceptId?: string): Set<string> {
 export function placementFits(layout: Layout, kind: PlaceableKind, place: Placement, exceptId?: string, grid: Grid = BASE_GRID) {
   if (!insideGrid(place, kind, grid)) return false;
   const taken = occupiedTiles(layout, exceptId);
-  return tilesOf(place, kind).every(tile => !isDoorTile(tile) && !taken.has(tileKey(tile)));
+  return tilesOf(place, kind).every(tile => !isDoorTile(tile, grid) && !taken.has(tileKey(tile)));
 }
 
 /** First free spot for a piece, preferring the upright orientation. */
@@ -204,9 +209,10 @@ export function blockedTiles(layout: Layout): Set<string> {
 
 export const isInside = (tile: Tile, grid: Grid = BASE_GRID) => tile.x >= 0 && tile.y >= 0 && tile.x < grid.w && tile.y < grid.h;
 /** The pavement right in front of the shop entrance. */
-export const isOutside = (tile: Tile) => (tile.x === 7 || tile.x === 8) && tile.y >= GRID_H && tile.y <= GRID_H + 1;
+export const isOutside = (tile: Tile, grid: Grid = BASE_GRID) =>
+  DOOR_X.includes(tile.x) && tile.y >= grid.h && tile.y <= grid.h + 1;
 export const isWalkable = (tile: Tile, blocked: Set<string>, grid: Grid = BASE_GRID) =>
-  (isInside(tile, grid) && !blocked.has(tileKey(tile))) || isOutside(tile);
+  (isInside(tile, grid) && !blocked.has(tileKey(tile))) || isOutside(tile, grid);
 
 const STEPS: Tile[] = [{ x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }];
 
@@ -243,12 +249,12 @@ export function findPath(from: Tile, goal: Tile, blocked: Set<string>, grid: Gri
 }
 
 /** All walkable tiles that touch a piece and can be used as a browsing spot. */
-export function freeSides(place: Placement, kind: PlaceableKind, blocked: Set<string>): Tile[] {
+export function freeSides(place: Placement, kind: PlaceableKind, blocked: Set<string>, grid: Grid = BASE_GRID): Tile[] {
   const own = new Set(tilesOf(place, kind).map(tileKey));
   const sides = new Map<string, Tile>();
   tilesOf(place, kind).forEach(tile => neighbours(tile).forEach(neighbour => {
     const key = tileKey(neighbour);
-    if (own.has(key) || sides.has(key) || !isWalkable(neighbour, blocked)) return;
+    if (own.has(key) || sides.has(key) || !isWalkable(neighbour, blocked, grid)) return;
     sides.set(key, neighbour);
   }));
   return [...sides.values()];

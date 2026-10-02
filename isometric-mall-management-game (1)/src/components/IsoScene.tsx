@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MutableRefObject, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import type { FurnitureKind, GameState, PlaceableKind, Placement, Shop, ShopKind } from '../game/data';
-import { SHOPS, SHOP_ORDER } from '../game/data';
+import { DEFAULT_SHOP_COLORS, SHOPS, SHOP_ORDER } from '../game/data';
 import type { VisibleGood } from '../game/visualInventory';
 import { createShopDisplay } from '../game/visualInventory';
-import type { Piece } from '../game/layout';
-import { DOOR_TILES, FLOOR_Z, PLACE_LABELS, blockedTiles, footprint, freeSides, gridOf, piecesOf, placeOf, placementFits } from '../game/layout';
+import { shade, shopPalette } from '../game/palette';
+import { normalizeColors } from '../game/engine';
+import type { Grid, Piece } from '../game/layout';
+import { FLOOR_Z, PLACE_LABELS, blockedTiles, doorTiles, footprint, freeSides, gridFor, gridOf, piecesOf, placeOf, placementFits } from '../game/layout';
 import { ARRANGE_KEYS, PICK_HEIGHT, canRotate, moveTarget, pickBox, pickPiece, rotateTarget } from './Arrange';
 import { serviceQueues } from '../game/services';
 import { staffRole } from '../game/engine';
@@ -60,7 +62,30 @@ export interface ArrangeApi {
 
 export interface ServiceHint { id: string; label: string; count: number }
 
-function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy = false, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, preview = false, noGround = false }: {
+/**
+ * The camera of the shop view. Everything that belongs to the scene – walls,
+ * pavement, benches and trees – is projected and the viewBox is chosen so the
+ * whole shop fits: an enlarged shop shows more tiles instead of being cut off.
+ */
+export function cameraViewBox(shop: Shop) {
+  const grid = gridOf(shop);
+  const grow = Math.max(grid.w, 9) - 9;
+  const growD = Math.max(grid.h, 7) - 7;
+  const xs = [-1.9, 12.2 + grow], ys = [-1.7, 10.4 + growD], zs = [-.3, 3.7];
+  const points: [number, number][] = [];
+  for (const x of xs) for (const y of ys) for (const z of zs) points.push(p(x, y, z));
+  const minX = Math.min(...points.map(point => point[0])) - 16;
+  const maxX = Math.max(...points.map(point => point[0])) + 16;
+  const minY = Math.min(...points.map(point => point[1])) - 16;
+  const maxY = Math.max(...points.map(point => point[1])) + 16;
+  const aspect = 860 / 500;
+  let width = maxX - minX, height = maxY - minY;
+  if (width / height < aspect) width = height * aspect; else height = width / aspect;
+  const centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
+  return `${(centerX - width / 2).toFixed(1)} ${(centerY - height / 2).toFixed(1)} ${width.toFixed(1)} ${height.toFixed(1)}`;
+}
+
+function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy = false, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, preview = false, noGround = false, dark = false }: {
   kind: ShopKind;
   shop: Shop;
   editing?: boolean;
@@ -76,10 +101,13 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
   selected?: VisibleGood | null;
   preview?: boolean;
   noGround?: boolean;
+  /** Dark interface: the surroundings are dimmed like an evening mall. */
+  dark?: boolean;
 }) {
   const tcg = kind === 'tcg', it = kind === 'it';
-  const wall = tcg ? '#c3afe2' : it ? '#b1cddc' : '#e6c9aa';
-  const wall2 = tcg ? '#d5c7eb' : it ? '#c8dce5' : '#f0dbc1';
+  // Wall and floor come from the player's colour choice, all shades follow.
+  const palette = shopPalette(normalizeColors(shop.colors, DEFAULT_SHOP_COLORS[kind]), dark);
+  const { wall, wallLight, wallTop, wallDeep, floorA, floorB, baseTop, baseLeft, baseRight } = palette;
   const accent = SHOPS[kind].color;
   const [signX,signY] = p(2.8,.22,3.05);
   const display = createShopDisplay(kind, shop);
@@ -90,7 +118,16 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
   /** The sales floor can be enlarged, so nothing here may assume 9 × 7 tiles. */
   const roomW = Math.max(grid.w, 9);
   const roomD = Math.max(grid.h, 7);
+  /** Tiles added to the right and to the front: the whole scene grows with them. */
   const grow = roomW - 9;
+  const growD = roomD - 7;
+  // Deckenlampen haengen ueber der Flaeche, Bilder an der Rueckwand: je groesser
+  // der Laden, desto mehr davon.
+  const lampSpots: [number, number][] = [];
+  for (let x = 2.2; x <= roomW - 1.6; x += 3.4) lampSpots.push([x, roomD - 2.4]);
+  for (let x = 4.6; x <= roomW - 1.6; x += 3.4) lampSpots.push([x, Math.min(roomD - 1.4, 4.6)]);
+  const artSpots: [number, number][] = [];
+  for (let x = 1.5; x <= roomW - 2.2; x += 2.6) artSpots.push([x, 2.05]);
   const pieces = piecesOf(shop);
   const blocked = blockedTiles(layout);
   const groupRef = useRef<SVGGElement>(null);
@@ -99,6 +136,19 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
   const [notice, setNotice] = useState<string | null>(null);
   const dragRef = useRef<DragState | null>(null);
   dragRef.current = drag;
+  // After an enlargement the new tiles glow for a few seconds, so the growth is
+  // visible right away, even in a shop that is full of furniture.
+  const growthRef = useRef(shop.expansions ?? 0);
+  const [freshGrid, setFreshGrid] = useState<Grid | null>(null);
+  useEffect(() => {
+    const level = shop.expansions ?? 0;
+    const before = growthRef.current;
+    growthRef.current = level;
+    if (level <= before) { setFreshGrid(null); return; }
+    setFreshGrid(gridFor(before));
+    const timer = window.setTimeout(() => setFreshGrid(null), 7000);
+    return () => window.clearTimeout(timer);
+  }, [shop.expansions]);
   const walkers = crowd?.walkers ?? [];
   const queuePads = crowd ? serviceQueues(kind, shop, blocked).map(queue => ({ queue, waiting: (crowd.queues[queue.info.id] || []).length })) : [];
   const hintKind = serviceHint ? (serviceHint.id.split('-')[0] as Piece['kind']) : null;
@@ -328,7 +378,7 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     const place = placeOf(layout, piece);
     const size = footprint(piece.kind, place.rot);
     const center = { x: place.x + size.w / 2, y: place.y + size.d / 2 };
-    const sides = freeSides(place, piece.kind, blocked);
+    const sides = freeSides(place, piece.kind, blocked, grid);
     const best = sides.sort((a, b) => (a.x + a.y) - (b.x + b.y)).find(tile => tile.x + tile.y >= center.x + center.y - .5) || sides[0];
     return best ? [best.x + .5, best.y + .5] : [center.x, center.y];
   };
@@ -343,33 +393,86 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     staffSpots.push(spotFor(staffWorkplace(index), [3.13, 5.08]));
   }
 
-  return <g ref={groupRef} className="shop-root" onPointerDown={editing ? scenePointerDown : undefined}>
+  return <g ref={groupRef} className={`shop-root ${dark ? 'is-night' : ''}`} onPointerDown={editing ? scenePointerDown : undefined}>
     {!noGround && <g>
-      <polygon points={polygon([[-1.5,-1.35,-.2],[11.8,-1.35,-.2],[11.8,10.1,-.2],[-1.5,10.1,-.2]])} fill="#829e8a" opacity=".09" transform="translate(4 12)" />
-      <Cube x={-1.5} y={-1.35} z={-.18} w={13.3} d={11.45} h={.22} top="#dce8de" left="#bed0c2" right="#c6d7ca" />
-      <polygon points={polygon([[9.45 + grow,-1.3,.055],[11.75 + grow,-1.3,.055],[11.75 + grow,10,.055],[9.45 + grow,10,.055]])} fill="#ebeae5" />
-      <polygon points={polygon([[-1.45,7.7,.056],[9.5 + grow,7.7,.056],[9.5 + grow,10,.056],[-1.45,10,.056]])} fill="#ebeae5" />
-      {Array.from({length: 13 + grow},(_,i) => <polyline key={`p${i}`} points={pts([p(-1.45+i,7.7,.061),p(-1.45+i,10,.061)])} stroke="#dcded7" strokeWidth=".8" fill="none" />)}
-      {Array.from({length: 12},(_,i) => <polyline key={`q${i}`} points={pts([p(9.45 + grow,-1.3+i,.061),p(11.75 + grow,-1.3+i,.061)])} stroke="#dcded7" strokeWidth=".8" fill="none" />)}
-      <Tree x={-.78} y={1.2} />
-      <Tree x={9.8 + grow} y={-.35} />
+      <polygon points={polygon([[-1.5,-1.35,-.2],[11.8,-1.35,-.2],[11.8,10.1 + growD,-.2],[-1.5,10.1 + growD,-.2]])} fill="#829e8a" opacity=".09" transform="translate(4 12)" />
+      <Cube x={-1.5} y={-1.35} z={-.18} w={13.3} d={11.45 + growD} h={.22} top={dark ? '#3c4440' : '#dce8de'} left={dark ? '#313833' : '#bed0c2'} right={dark ? '#363d38' : '#c6d7ca'} />
+      <g className="mall-ground">
+        <polygon points={polygon([[9.45 + grow,-1.3,.055],[11.75 + grow,-1.3,.055],[11.75 + grow,10 + growD,.055],[9.45 + grow,10 + growD,.055]])} fill="#ebeae5" />
+        <polygon points={polygon([[-1.45,7.7 + growD,.056],[9.5 + grow,7.7 + growD,.056],[9.5 + grow,10 + growD,.056],[-1.45,10 + growD,.056]])} fill="#ebeae5" />
+        {Array.from({length: 13 + grow},(_,i) => <polyline key={`p${i}`} points={pts([p(-1.45+i,7.7 + growD,.061),p(-1.45+i,10 + growD,.061)])} stroke="#dcded7" strokeWidth=".8" fill="none" />)}
+        {Array.from({length: 12 + growD},(_,i) => <polyline key={`q${i}`} points={pts([p(9.45 + grow,-1.3+i,.061),p(11.75 + grow,-1.3+i,.061)])} stroke="#dcded7" strokeWidth=".8" fill="none" />)}
+        <g opacity={dark ? .68 : 1}>
+          <Tree x={-.78} y={1.2} />
+          <Tree x={9.8 + grow} y={-.35} />
+        </g>
+      </g>
+      {dark && <polygon className="night-pavement" points={polygon([[-1.48,-1.33,.062],[11.78 + grow,-1.33,.062],[11.78 + grow,10.08 + growD,.062],[-1.48,10.08 + growD,.062]])} />}
     </g>}
-    <Cube x={-.2} y={-.2} z={.06} w={grow + 9.4} d={7.4} h={.3} top={tcg ? '#eae5ef' : it ? '#e4edf0' : '#f0e9dc'} left="#c2b7cd" right="#d0c6d8" />
-    {Array.from({length: roomW},(_,x) => Array.from({length: roomD},(_,y) => <polygon key={`tile-${x}-${y}`} points={polygon([[x,y,.37],[x+.99,y,.37],[x+.99,y+.99,.37],[x,y+.99,.37]])} fill={(tcg ? ['#eee8f1','#f6f1f6'] : it ? ['#e9f0f2','#f4f8f7'] : ['#f2ebdf','#faf5ec'])[(x+y)%2]} stroke={tcg ? '#eee8f1' : it ? '#e9f0f2' : '#f2ebdf'} strokeWidth=".5" />))}
+    <Cube x={-.2} y={-.2} z={.06} w={grow + 9.4} d={7.4 + growD} h={.3} top={baseTop} left={baseLeft} right={baseRight} />
+    {Array.from({length: roomW},(_,x) => Array.from({length: roomD},(_,y) => <polygon key={`tile-${x}-${y}`} points={polygon([[x,y,.37],[x+.99,y,.37],[x+.99,y+.99,.37],[x,y+.99,.37]])} fill={(x+y)%2 ? floorB : floorA} stroke={floorA} strokeWidth=".5" />))}
+    {freshGrid && <g className="fresh-tiles" pointerEvents="none">
+      {Array.from({length: roomW},(_,x) => Array.from({length: roomD},(_,y) => (x >= freshGrid.w || y >= freshGrid.h)
+        ? <polygon key={`fresh-${x}-${y}`} points={polygon([[x + .05,y + .05,.381],[x + .94,y + .05,.381],[x + .94,y + .94,.381],[x + .05,y + .94,.381]])} className="fresh-tile" />
+        : null))}
+    </g>}
     {editing && <g className="layout-grid" pointerEvents="none">
       {Array.from({ length: roomW + 1 }, (_, i) => <polyline key={`v${i}`} points={pts([p(i, 0, .378), p(i, roomD, .378)])} />)}
       {Array.from({ length: roomD + 1 }, (_, i) => <polyline key={`h${i}`} points={pts([p(0, i, .378), p(roomW, i, .378)])} />)}
-      {DOOR_TILES.map(tile => <polygon key={`door-${tile.x}-${tile.y}`} points={polygon([[tile.x,tile.y,.379],[tile.x+1,tile.y,.379],[tile.x+1,tile.y+1,.379],[tile.x,tile.y+1,.379]] as [number, number, number][])} className="layout-door" />)}
+      {doorTiles(grid).map(tile => <polygon key={`door-${tile.x}-${tile.y}`} points={polygon([[tile.x,tile.y,.379],[tile.x+1,tile.y,.379],[tile.x+1,tile.y+1,.379],[tile.x,tile.y+1,.379]] as [number, number, number][])} className="layout-door" />)}
     </g>}
     {editing && drag && <polygon points={polygon(([[drag.place.x, drag.place.y, FLOOR_Z + .02], [drag.place.x + footprint(drag.kind, drag.place.rot).w, drag.place.y, FLOOR_Z + .02], [drag.place.x + footprint(drag.kind, drag.place.rot).w, drag.place.y + footprint(drag.kind, drag.place.rot).d, FLOOR_Z + .02], [drag.place.x, drag.place.y + footprint(drag.kind, drag.place.rot).d, FLOOR_Z + .02]] as [number, number, number][]))} className={`layout-ghost ${drag.valid ? 'valid' : 'invalid'}`} pointerEvents="none" />}
-    <Cube x={0} y={-.22} w={grow + 9.12} d={.22} h={3.5} top="#e0d6ee" left={wall2} right={wall} />
-    <Cube x={-.22} y={0} w={.22} d={6.9} h={3.5} top="#dfd5eb" left={wall} right={wall} />
+    <Cube x={0} y={-.22} w={grow + 9.12} d={.22} h={3.5} top={wallTop} left={wallLight} right={wall} />
+    <Cube x={-.22} y={0} w={.22} d={6.9 + growD} h={3.5} top={wallTop} left={wall} right={wallLight} />
+    <g className="interior-decor" pointerEvents="none">
+      {/* Eingangsmatte und Laufweg bis in die Mitte des Ladens */}
+      <polygon points={polygon([[7.05, roomD - 1.02, FLOOR_Z + .008], [8.95, roomD - 1.02, FLOOR_Z + .008], [8.95, roomD - .04, FLOOR_Z + .008], [7.05, roomD - .04, FLOOR_Z + .008]])} className="floor-mat" />
+      {Array.from({ length: roomW - 5 }, (_, index) => {
+        const x = 2.6 + index;
+        if (x > roomW - 2.4) return null;
+        return <polygon key={`path-${index}`} points={polygon([[x, roomD - 2.35, FLOOR_Z + .006], [x + .55, roomD - 2.35, FLOOR_Z + .006], [x + .55, roomD - 1.35, FLOOR_Z + .006], [x, roomD - 1.35, FLOOR_Z + .006]])} className="floor-path" />;
+      })}
+      {/* Teppich in der Raummitte, waechst mit dem Laden mit */}
+      <polygon points={polygon([[roomW / 2 - 2.1, roomD / 2 - 1.15, FLOOR_Z + .007], [roomW / 2 + 2.1, roomD / 2 - 1.15, FLOOR_Z + .007], [roomW / 2 + 2.1, roomD / 2 + 1.15, FLOOR_Z + .007], [roomW / 2 - 2.1, roomD / 2 + 1.15, FLOOR_Z + .007]])} className="floor-rug" />
+      <polygon points={polygon([[roomW / 2 - 1.75, roomD / 2 - .85, FLOOR_Z + .009], [roomW / 2 + 1.75, roomD / 2 - .85, FLOOR_Z + .009], [roomW / 2 + 1.75, roomD / 2 + .85, FLOOR_Z + .009], [roomW / 2 - 1.75, roomD / 2 + .85, FLOOR_Z + .009]])} className="floor-rug-inner" />
+      {/* Deckenlampen mit warmem Lichtkreis auf dem Boden */}
+      {lampSpots.map(([x, y], index) => {
+        const [lx, ly] = p(x, y, 3.46);
+        const [gx, gy] = p(x, y, FLOOR_Z);
+        return <g key={`lamp-${index}`}>
+          <ellipse cx={gx} cy={gy} rx={17} ry={8.5} className="lamp-glow" />
+          <line x1={lx} y1={ly - 2} x2={lx} y2={ly + 22} className="lamp-cord" />
+          <ellipse cx={lx} cy={ly + 25} rx={10} ry={5} className="lamp-shade" />
+          <ellipse cx={lx} cy={ly + 27} rx={6} ry={3} className="lamp-light" />
+        </g>;
+      })}
+      {/* Deckenventilator in der Mitte */}
+      {(() => {
+        const [fx, fy] = p(roomW / 2, roomD / 2, 3.3);
+        return <g className="ceiling-fan">
+          <line x1={fx} y1={fy - 16} x2={fx} y2={fy - 5} className="lamp-cord" />
+          {[0, 60, 120].map(angle => <ellipse key={angle} cx={fx} cy={fy} rx={13} ry={3.2} className="fan-blade" transform={`rotate(${angle} ${fx} ${fy})`} />)}
+          <circle cx={fx} cy={fy} r={3.4} className="fan-hub" />
+        </g>;
+      })()}
+      {/* Bilder an der Rueckwand */}
+      {artSpots.map(([x, z], index) => <g key={`art-${index}`} className="wall-art">
+        <polygon points={polygon([[x, .015, z], [x + .95, .015, z], [x + .95, .015, z + .72], [x, .015, z + .72]])} className="art-frame" />
+        <polygon points={polygon([[x + .1, .02, z + .1], [x + .85, .02, z + .1], [x + .85, .02, z + .62], [x + .1, .02, z + .62]])} className={`art-picture art-${index % 3}`} />
+        <polygon points={polygon([[x + .18, .025, 3.4], [x + .5, .025, z + .18], [x + .3, .025, z + .2], [x + .12, .025, z + .5]])} className="art-shine" />
+      </g>)}
+    </g>
     {grow > 0 && <g>
-      <Cube x={8.78} y={7} w={grow + .22} d={.2} h={.75} top="#d4c3e1" left={tcg ? '#b59cce' : it ? '#9fbecf' : '#d2aa83'} right="#c5b0d9" />
-      <polygon points={polygon([[8.98, 7.06, .78], [8.98, 7.06, 2.5], [8.94 + grow, 7.06, 2.5], [8.94 + grow, 7.06, .78]])} fill="#e6f0f1" opacity=".3" />
-      <polyline points={pts([p(8.98, 7.06, .78), p(8.98, 7.06, 2.5), p(8.94 + grow, 7.06, 2.5), p(8.94 + grow, 7.06, .78)])} fill="none" stroke="#f9f8f6" strokeWidth="2.4" />
+      <Cube x={8.78} y={roomD} w={grow + .22} d={.2} h={.75} top={wallTop} left={wallDeep} right={wallLight} />
+      <polygon points={polygon([[8.98, roomD + .06, .78], [8.98, roomD + .06, 2.5], [8.94 + grow, roomD + .06, 2.5], [8.94 + grow, roomD + .06, .78]])} fill="#dceef1" opacity=".5" />
+      <polygon points={polygon([[8.98, roomD + .055, 1.5], [9.6 + grow, roomD + .055, 1.1], [9.6 + grow, roomD + .055, 1.6], [8.98, roomD + .055, 2.05]])} fill="#ffffff" opacity=".35" />
+      <polyline points={pts([p(8.98, roomD + .06, .78), p(8.98, roomD + .06, 2.5), p(8.94 + grow, roomD + .06, 2.5), p(8.94 + grow, roomD + .06, .78)])} fill="none" stroke="#f9f8f6" strokeWidth="2.4" />
+      {Array.from({ length: Math.max(1, Math.round(grow / 1.5)) }, (_, index) => {
+        const x = 8.98 + (index + 1) * grow / (Math.max(1, Math.round(grow / 1.5)) + 1);
+        return <polyline key={`mullion-${index}`} points={pts([p(x, roomD + .07, .78), p(x, roomD + .07, 2.5)])} fill="none" stroke="#f9f8f6" strokeWidth="1.6" />;
+      })}
     </g>}
-    <polygon points={polygon([[.012,2.2,1.3],[.012,3.85,1.3],[.012,3.85,3.2],[.012,2.2,3.2]])} fill="#e6f0f1" stroke="#f9f8f6" strokeWidth="4" />
+    <polygon points={polygon([[.012,2.2,1.3],[.012,3.85,1.3],[.012,3.85,3.2],[.012,2.2,3.2]])} fill={dark ? '#ffeec4' : '#e6f0f1'} stroke="#f9f8f6" strokeWidth="4" />
     <polyline points={pts([p(.016,3.02,1.3),p(.016,3.02,3.2)])} stroke="#fff" strokeWidth="3" />
     <polyline points={pts([p(.016,2.2,2.3),p(.016,3.85,2.3)])} stroke="#fff" strokeWidth="3" />
     <polygon points={polygon([[.02,2.25,1.5],[.02,3.6,1.5],[.02,3.6,2.8]])} fill="#c4e1df" opacity=".6" />
@@ -410,18 +513,18 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
     {staffSpots.map(([x, y], index) => <Person key={`staff-${index}`} x={x} y={y} color={index === 0 ? '#96aabe' : '#b5a0c5'} staff />)}
     {showCustomers && <CustomerGroup walkers={walkers} />}
     {player && <PlayerAvatar player={player} busy={busy} />}
-    <Cube x={-.22} y={7} w={6.9} d={.2} h={.75} top="#d4c3e1" left={tcg ? '#b59cce' : it ? '#9fbecf' : '#d2aa83'} right="#c5b0d9" />
-    <g transform={`translate(${p(1.15,7.24,.8).join(',')}) rotate(26.565)`}>
+    <Cube x={-.22} y={roomD} w={6.9} d={.2} h={.75} top={wallTop} left={wallDeep} right={wallLight} />
+    <g transform={`translate(${p(1.15,roomD + .24,.8).join(',')}) rotate(26.565)`}>
       <text fill="#fffdfd" fontSize="12" fontWeight="800" letterSpacing="1.4">{shop.name.toUpperCase()}</text>
     </g>
-    <Cube x={roomW} y={0} w={.23} d={7} h={.36} top="#ddd1e8" left="#c2b0d5" right="#c5b5d6" />
-    <Cube x={6.85} y={7} w={.22} d={.3} h={2.3} top="#e8dcef" left="#cdbade" right="#d9c9e7" />
-    <Cube x={8.78} y={7} w={.22} d={.3} h={2.3} top="#e8dcef" left="#cdbade" right="#d9c9e7" />
-    <Cube x={6.85} y={7} z={2.52} w={2.15} d={.3} h={.24} top="#e6dcf0" left="#bfadd4" right="#d4c3e3" />
-    <polygon points={polygon([[7.08,7.15,.4],[8.77,7.15,.4],[8.77,7.15,2.5],[7.08,7.15,2.5]])} fill="#cfebed" opacity=".24" />
-    <polyline points={pts([p(7.92,7.15,.4),p(7.92,7.15,2.5)])} stroke="#eeeaf3" strokeWidth="2" />
-    <polyline points={pts([p(7.73,7.17,1.35),p(7.73,7.17,1.65)])} stroke="#b19cc9" strokeWidth="2.5" />
-    <g transform={`translate(${p(8.39,7.18,1.67).join(',')}) rotate(26.565)`}>
+    <Cube x={roomW} y={0} w={.23} d={roomD} h={.36} top={wallTop} left={wallDeep} right={wallLight} />
+    <Cube x={6.85} y={roomD} w={.22} d={.3} h={2.3} top={wallTop} left={wallDeep} right={wallLight} />
+    <Cube x={8.78} y={roomD} w={.22} d={.3} h={2.3} top={wallTop} left={wallDeep} right={wallLight} />
+    <Cube x={6.85} y={roomD} z={2.52} w={2.15} d={.3} h={.24} top={wallTop} left={wallDeep} right={wall} />
+    <polygon points={polygon([[7.08,roomD + .15,.4],[8.77,roomD + .15,.4],[8.77,roomD + .15,2.5],[7.08,roomD + .15,2.5]])} fill="#cfebed" opacity=".24" />
+    <polyline points={pts([p(7.92,roomD + .15,.4),p(7.92,roomD + .15,2.5)])} stroke="#eeeaf3" strokeWidth="2" />
+    <polyline points={pts([p(7.73,roomD + .17,1.35),p(7.73,roomD + .17,1.65)])} stroke={wallDeep} strokeWidth="2.5" />
+    <g transform={`translate(${p(8.39,roomD + .18,1.67).join(',')}) rotate(26.565)`}>
       <rect x="-13" y="-5" width="26" height="11" rx="1.6" fill={shop.open ? '#5c9474' : '#b38b79'} stroke="#f8f8eb" strokeWidth="1.2" />
       <text x="0" y="2.5" textAnchor="middle" fill="#fffdf3" fontSize="6.2" fontWeight="800" letterSpacing=".4">{shop.open ? 'OFFEN' : 'ZU'}</text>
     </g>
@@ -433,16 +536,20 @@ function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy
         <text x={bx} y={by + 2} textAnchor="middle">{notice}</text>
       </g>;
     })()}
-    {!noGround && <g>
-      <Cube x={6.88} y={7.25} z={.06} w={2.16} d={.48} h={.15} top="#e4dce9" left="#cbc2d3" right="#d5cdda" />
-      <Cube x={6.88} y={7.73} z={.05} w={2.16} d={.35} h={.07} top="#e8e1eb" left="#d0c8d7" right="#d8d1de" />
-      <Bench x={1.25} y={8.57} />
+    {!noGround && <g opacity={dark ? .62 : 1}>
+      <Cube x={6.88} y={roomD + .25} z={.06} w={2.16} d={.48} h={.15} top={baseTop} left={baseLeft} right={baseRight} />
+      <Cube x={6.88} y={roomD + .73} z={.05} w={2.16} d={.35} h={.07} top={shade(floorA, .05)} left={baseLeft} right={baseRight} />
+      <Bench x={1.25} y={8.57 + growD} />
       <Bench x={10.13 + grow} y={1.66} />
-      <Plant x={-.7} y={7.1} big />
-      <Plant x={9.3 + grow} y={7.25} big />
-      <Tree x={10.4 + grow} y={8.55} />
-      <g><path d={`M${p(11 + grow,.3)[0]} ${p(11 + grow,.3)[1]}v-75`} stroke="#a6b5ad" strokeWidth="3" /><circle cx={p(11 + grow,.3)[0]} cy={p(11 + grow,.3)[1]-78} r="7" fill="#f8f5db" stroke="#bbc9bb" strokeWidth="2" /></g>
-      {showCustomers && <g><Person x={9.9} y={8.9} color="#c190ae" walking delay={1} /><Person x={5.04} y={9.04} color="#7498b3" walking delay={3} /><Person x={10.38} y={4.44} color="#e0ad67" walking delay={2} /><Person x={-.66} y={8.67} color="#8aada1" /></g>}
+      <Plant x={-.7} y={7.1 + growD} big />
+      <Plant x={9.3 + grow} y={7.25 + growD} big />
+      <Tree x={10.4 + grow} y={8.55 + growD} />
+      <g>
+        <path d={`M${p(11 + grow,.3)[0]} ${p(11 + grow,.3)[1]}v-75`} stroke="#a6b5ad" strokeWidth="3" />
+        {dark && <circle cx={p(11 + grow,.3)[0]} cy={p(11 + grow,.3)[1]-76} r={26} className="lamp-halo" />}
+        <circle cx={p(11 + grow,.3)[0]} cy={p(11 + grow,.3)[1]-78} r="7" fill={dark ? '#ffe9ad' : '#f8f5db'} stroke="#bbc9bb" strokeWidth="2" />
+      </g>
+      {showCustomers && <g className="mall-ground"><Person x={9.9} y={8.9 + growD} color="#c190ae" walking delay={1} /><Person x={5.04} y={9.04 + growD} color="#7498b3" walking delay={3} /><Person x={10.38} y={4.44} color="#e0ad67" walking delay={2} /><Person x={-.66} y={8.67 + growD} color="#8aada1" /></g>}
     </g>}
   </g>;
 }
@@ -481,11 +588,11 @@ export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null
     if (game.paused || reduced) ref.current?.pauseAnimations();
     else ref.current?.unpauseAnimations();
   }, [game.paused, mode]);
-  return <svg ref={ref} className={`iso-scene ${game.paused ? 'simulation-paused' : ''} ${editing ? 'is-arranging' : ''}`} viewBox="0 0 860 500" role="group" aria-label={`Interaktive isometrische ${mode === 'shop' ? SHOPS[kind].label : 'Mall'}-Ansicht`}>
+  return <svg ref={ref} className={`iso-scene ${game.paused ? 'simulation-paused' : ''} ${editing ? 'is-arranging' : ''}`} viewBox={mode === 'shop' ? cameraViewBox(game.shops[kind]) : '0 0 860 500'} role="group" aria-label={`Interaktive isometrische ${mode === 'shop' ? SHOPS[kind].label : 'Mall'}-Ansicht`}>
     <defs><filter id="scene-shadow" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="12" stdDeviation="8" floodColor="#809c89" floodOpacity=".12" /></filter></defs>
     <g transform={`translate(430 250) scale(${zoom}) translate(-430 -250)`}>
       {mode === 'shop'
-        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} crowd={crowd} player={player} serviceHint={serviceHint} busy={busy} onInteract={onInteract} onInspect={onInspect} onMove={onMove} arrangeApi={arrangeApi} onArrangeInfo={onArrangeInfo} selected={selected} preview={!game.hasChosen} /></g>
+        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} crowd={crowd} player={player} serviceHint={serviceHint} busy={busy} onInteract={onInteract} onInspect={onInspect} onMove={onMove} arrangeApi={arrangeApi} onArrangeInfo={onArrangeInfo} selected={selected} preview={!game.hasChosen} dark={game.theme === 'dark'} /></g>
         : <g>
           <polygon points="35,216 443,12 817,202 410,422" fill="#e1eae0" />
           <path d="M160 275L550 80M250 330L654 128M330 180L653 341" stroke="#eeeee8" strokeWidth="36" />

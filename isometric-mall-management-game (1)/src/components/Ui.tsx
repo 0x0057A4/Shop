@@ -9,7 +9,7 @@ import {
   Cpu, Croissant, Clock3, Sparkles, ShoppingBag, Truck, Zap, Search, Bell,
   Pencil, Volume2, VolumeX, Download, Trash2, ChevronsRight, Eye, Wrench,
   CircleCheck, Package, ShieldCheck, BookOpen, ArrowRight, Sun, LockKeyhole,
-  Monitor, Armchair, CreditCard, MoveUpRight, Upload, Menu, Gift,
+  Monitor, Armchair, CreditCard, MoveUpRight, Upload, Menu, Gift, Moon, Palette,
 } from 'lucide-react';
 import type { ShopKind } from '../game/data';
 
@@ -26,7 +26,7 @@ const iconMap = {
   shield: ShieldCheck, book: BookOpen, arrow: ArrowRight, sun: Sun, lock: LockKeyhole,
   monitor: Monitor, chair: Armchair, register: CreditCard, move: MoveUpRight,
   upload: Upload, menu: Menu, gift: Gift,
-  staff: Users, shelf: Layers, box: Package, expand: Maximize,
+  staff: Users, shelf: Layers, box: Package, expand: Maximize, moon: Moon, palette: Palette,
 };
 
 export type IconName = keyof typeof iconMap;
