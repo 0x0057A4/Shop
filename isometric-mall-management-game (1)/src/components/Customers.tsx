@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Shop, ShopKind } from '../game/data';
 import type { ShopDisplay } from '../game/visualInventory';
 import type { Tile } from '../game/layout';
@@ -9,11 +8,15 @@ import type { QueueCustomer } from '../game/services';
 import { makeCustomer, serviceQueues } from '../game/services';
 import type { ServiceQueue } from '../game/services';
 import { p } from './isoGeometry';
-import { SmoothGroup } from './Motion';
+import { WALK_STEP_MS, facingOf, registerWalkerNode, tileOf, walkerTraits } from './CustomerMotion';
+import type { WalkerParts } from './CustomerMotion';
+
+// Auf dem Server gibt es keine Layout-Phase; dort reicht der normale Effekt.
+const useIsoLayout = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 export const CUSTOMER_COLORS = ['#ddb28c', '#89abc3', '#c89eab', '#88b8a4', '#c190ae', '#7498b3', '#e0ad67', '#8aada1'];
-/** Milliseconds per tile step. */
-export const CUSTOMER_TICK_MS = 420;
+/** Milliseconds per tile step; the walk loop uses the same clock. */
+export const CUSTOMER_TICK_MS = WALK_STEP_MS;
 /** How long a walker glides from one tile to the next; slightly shorter than the tick. */
 export const CUSTOMER_GLIDE_MS = 400;
 const MAX_WALKERS = 5;
@@ -30,6 +33,8 @@ export interface WalkerState {
   serviceId: string | null;
   target: Tile | null;
   customer: QueueCustomer | null;
+  /** How many ticks the customer already lingers at its spot while fading out. */
+  linger?: number;
 }
 
 export interface CrowdState {
@@ -69,6 +74,19 @@ export function crowdContext(kind: ShopKind, shop: Shop, display: ShopDisplay): 
   return { blocked, grid, browse, services: serviceQueues(kind, shop, blocked), doors: doorTiles(grid) };
 }
 
+/** The pavement in front of the entrance, where the floor grid has ended. */
+export function onApron(tile: Tile, grid: Grid) {
+  return tile.x >= -2 && tile.x <= grid.w + 1 && tile.y >= -2 && tile.y <= grid.h + 3;
+}
+
+/** Can this walker put its foot on that tile? Coming and going uses the apron. */
+export function walkableFor(walker: WalkerState, context: CrowdContext) {
+  if (walker.phase !== 'arrive' && walker.phase !== 'leave') {
+    return (tile: Tile) => isWalkable(tile, context.blocked, context.grid);
+  }
+  return (tile: Tile) => onApron(tile, context.grid) && !context.blocked.has(`${tile.x},${tile.y}`);
+}
+
 function pick<T>(list: T[]): T | undefined {
   return list.length ? list[Math.floor(Math.random() * list.length)] : undefined;
 }
@@ -77,11 +95,23 @@ function planTo(from: Tile, goal: Tile, context: CrowdContext): Tile[] | null {
   return findPath(from, goal, context.blocked, context.grid);
 }
 
+/**
+ * Leaving the shop: through the door, down the two steps to the pavement and
+ * then along the corridor until the customer is out of the picture. Tiles in
+ * front of the shop are no floor tiles any more, so this part is planned by hand.
+ */
 function planOutside(from: Tile, context: CrowdContext): Tile[] | null {
   const doors = [...context.doors].sort(() => Math.random() - .5);
   for (const door of doors) {
-    const path = planTo(from, { x: door.x, y: door.y + 2 }, context);
-    if (path) return path;
+    const inside = planTo(from, door, context);
+    if (!inside) continue;
+    const steps: Tile[] = [{ x: door.x, y: door.y + 1 }, { x: door.x, y: door.y + 2 }];
+    const side = Math.random() < .5 ? -1 : 1;
+    const targetX = Math.max(-1, Math.min(context.grid.w, door.x + side * (2 + Math.round(Math.random() * 3))));
+    let x = door.x;
+    const y = door.y + 2;
+    while (x !== targetX) { x += targetX > x ? 1 : -1; steps.push({ x, y }); }
+    return [...inside, ...steps];
   }
   return null;
 }
@@ -97,11 +127,10 @@ function planBrowse(from: Tile, context: CrowdContext): Tile[] | null {
 }
 
 function withPath(walker: WalkerState, path: Tile[]): WalkerState {
-  return { ...walker, path, step: 0, target: path[path.length - 1] ?? null };
+  return { ...walker, path, step: 0, target: path[path.length - 1] ?? null, linger: 0 };
 }
 
-const here = (walker: WalkerState): Tile =>
-  walker.path[Math.max(0, Math.min(walker.step, walker.path.length - 1))] ?? { x: 7, y: 6 };
+const here = (walker: WalkerState): Tile => tileOf(walker);
 
 export function targetCount(shop: Shop) {
   return Math.max(1, Math.min(MAX_WALKERS, 1 + Math.round(shop.popularity / 18)));
@@ -148,7 +177,7 @@ export function stepCrowd(state: CrowdState, kind: ShopKind, shop: Shop, display
     if (walker.pause > 0) { next.push({ ...walker, pause: walker.pause - 1 }); continue; }
     if (walker.step < walker.path.length - 1) {
       const upcoming = walker.path[walker.step + 1];
-      if (isWalkable(upcoming, context.blocked, context.grid)) { next.push({ ...walker, step: walker.step + 1 }); continue; }
+      if (walkableFor(walker, context)(upcoming)) { next.push({ ...walker, step: walker.step + 1 }); continue; }
       // Furniture moved into the way: find a new route, otherwise leave the shop.
       const current = walker.path[walker.step];
       const replanned = walker.target ? planTo(current, walker.target, context) : null;
@@ -161,7 +190,10 @@ export function stepCrowd(state: CrowdState, kind: ShopKind, shop: Shop, display
     // through the door instead of vanishing at the counter.
     if (walker.phase === 'leave') {
       const exit = planOutside(here(walker), context);
-      if (exit && exit.length > 1) next.push(withPath(walker, exit));
+      if (exit && exit.length > 1) { next.push(withPath(walker, exit)); continue; }
+      // Stehen bleiben, damit die Figur in Ruhe ausblenden kann.
+      const linger = (walker.linger ?? 0) + 1;
+      if (linger <= 2) next.push({ ...walker, linger });
       continue;
     }
     if (walker.phase === 'queue') { next.push(walker); continue; }
@@ -313,50 +345,69 @@ export function CustomerGroup({ walkers }: { walkers: WalkerState[] }) {
 }
 
 /**
- * Which way a customer looks: one step to the right goes down-right on screen,
- * one step back up-left, so the sign of the screen movement decides it.
- */
-export function stepFacing(walker: WalkerState): 'left' | 'right' {
-  const tile = here(walker);
-  const previous = walker.path[Math.max(0, walker.step - 1)] ?? tile;
-  return ((tile.x - previous.x) - (tile.y - previous.y)) < 0 ? 'left' : 'right';
-}
-
-/**
  * One customer as a standalone node. The scene sorts every customer in with the
  * furniture by its floor depth, so the shop really stands in front of them.
+ * Position and facing are handed to the walk loop (CustomerMotion); React only
+ * draws the figure itself and keeps the data attributes for static pictures.
  */
 export function CustomerFigure({ walker }: { walker: WalkerState }) {
-  const tile = here(walker);
+  const tile = tileOf(walker);
   const [px, py] = p(tile.x + .5, tile.y + .5, .4);
+  const traits = walkerTraits(walker.id);
   const walking = walker.pause === 0 && walker.step < walker.path.length - 1;
-  return <Walker px={px} py={py} color={walker.color} walking={walking}
-    facing={stepFacing(walker)}
-    arriving={walker.step >= walker.path.length - 1}
-    carry={walker.customer && walker.serviceId?.startsWith('workbench') ? 'box' : 'bag'}
-    waiting={walker.phase === 'queue'} />;
+  const entering = walker.phase === 'arrive' && walker.step <= 1;
+  const leaving = walker.phase === 'leave' && walker.path.length - 1 - walker.step <= 1;
+  const parts = useRef<WalkerParts>({});
+  const handOver = () => registerWalkerNode(walker.id, parts.current);
+  useIsoLayout(handOver, []);
+  useEffect(() => () => registerWalkerNode(walker.id, null), [walker.id]);
+  return <g className={`customer-walker ${walking ? 'is-walking' : ''} ${entering ? 'is-entering' : ''} ${leaving ? 'is-leaving' : ''}`}>
+    <g
+      className="walker-motion" data-x={(px + traits.offsetX).toFixed(1)} data-y={(py + traits.offsetY).toFixed(1)}
+      ref={node => { parts.current.motion = node; handOver(); }}
+    >
+      <ellipse
+        className="customer-shadow" cx="0" cy="0" rx="10" ry="4.5" fill="#68768c" opacity=".15"
+        ref={node => { parts.current.shadow = node; handOver(); }}
+      />
+      <g className="walker-face" ref={node => { parts.current.face = node; handOver(); }}>
+        <g className="customer-bob" transform={`scale(${traits.scale.toFixed(3)})`} ref={node => { parts.current.body = node; handOver(); }}>
+          <PersonFigure
+            color={walker.color} hair={traits.hair} walking={walking} waiting={walker.phase === 'queue'}
+            carry={walker.customer && walker.serviceId?.startsWith('workbench') ? 'box' : 'bag'}
+            parts={parts.current}
+          />
+        </g>
+      </g>
+    </g>
+  </g>;
 }
 
-/** An animated customer; the figure glides from tile to tile instead of jumping. */
-export function Walker({ px, py, color, walking, facing = 'right', arriving = false, carry = 'bag', waiting = false }: { px: number; py: number; color: string; walking: boolean; facing?: 'left' | 'right'; arriving?: boolean; carry?: 'bag' | 'box'; waiting?: boolean }) {
-  // On the way the walker keeps a steady pace, only the last step eases in.
-  const ease = walking && !arriving ? 'linear' : 'smooth';
-  return <SmoothGroup className={`customer-walker ${walking ? 'is-walking' : ''}`} x={px} y={py} ms={CUSTOMER_GLIDE_MS} ease={ease} style={{ '--step-ms': `${CUSTOMER_GLIDE_MS}ms` } as CSSProperties}>
-    <ellipse className="customer-shadow" cx="0" cy="0" rx="10" ry="4.5" fill="#68768c" opacity=".15" />
-    <g transform={facing === 'left' ? 'scale(-1 1)' : undefined}>
+/** Which way one customer looks (the screen movement of its last step). */
+export function stepFacing(walker: WalkerState): 'left' | 'right' {
+  return facingOf(walker) < 0 ? 'left' : 'right';
+}
+
+/** A customer that simply stands where it is put (used for previews and tests). */
+export function Walker({ px, py, color, walking, carry = 'bag', waiting = false }: { px: number; py: number; color: string; walking: boolean; carry?: 'bag' | 'box'; waiting?: boolean }) {
+  return <g className={`customer-walker ${walking ? 'is-walking' : ''}`}>
+    <g className="walker-motion" transform={`translate(${px.toFixed(2)}, ${py.toFixed(2)})`}>
+      <ellipse className="customer-shadow" cx="0" cy="0" rx="10" ry="4.5" fill="#68768c" opacity=".15" />
       <g className={walking ? 'customer-bob' : ''}><PersonFigure color={color} carry={carry} waiting={waiting} walking={walking} /></g>
     </g>
-  </SmoothGroup>;
+  </g>;
 }
 
 /** The body of a person, drawn with the feet at the local origin. */
-export function PersonFigure({ color, staff = false, carry = 'bag', waiting = false, walking = false }: { color: string; staff?: boolean; carry?: 'bag' | 'box' | 'none'; waiting?: boolean; walking?: boolean }) {
+export function PersonFigure({ color, hair = '#59566c', staff = false, carry = 'bag', waiting = false, walking = false, parts }: { color: string; hair?: string; staff?: boolean; carry?: 'bag' | 'box' | 'none'; waiting?: boolean; walking?: boolean; parts?: WalkerParts }) {
   // Legs and arms hang on their own pivot so the walk cycle can swing them.
-  const leg = (back: boolean) => <g key={back ? 'leg-back' : 'leg-front'} className={`person-leg ${back ? 'is-back' : ''} ${walking ? 'is-walking' : ''}`} style={{ transformOrigin: back ? '-3px -17px' : '6px -17px' }}>
+  const leg = (back: boolean) => <g key={back ? 'leg-back' : 'leg-front'} className={`person-leg ${back ? 'is-back' : ''} ${walking ? 'is-walking' : ''}`}
+    ref={node => { if (parts) { if (back) parts.legBack = node; else parts.legFront = node; } }}>
     <path d={back ? 'M-3 -17l-1 14' : 'M6 -17l1 14'} stroke="#475168" strokeWidth="4.5" strokeLinecap="round" />
     <path d={back ? 'M-5 -2h-4' : 'M4 -2h4'} stroke="#354159" strokeWidth="3" strokeLinecap="round" />
   </g>;
-  const arm = (back: boolean) => <g key={back ? 'arm-back' : 'arm-front'} className={`person-arm ${back ? 'is-back' : ''} ${walking ? 'is-walking' : ''}`} style={{ transformOrigin: back ? '-7px -31px' : '11px -31px' }}>
+  const arm = (back: boolean) => <g key={back ? 'arm-back' : 'arm-front'} className={`person-arm ${back ? 'is-back' : ''} ${walking ? 'is-walking' : ''}`}
+    ref={node => { if (parts) { if (back) parts.armBack = node; else parts.armFront = node; } }}>
     <path d={back ? 'M-7 -31l-4 13' : 'M11 -31l4 13'} stroke={color} strokeWidth="5" strokeLinecap="round" />
   </g>;
   return <g className={`person-figure ${walking ? 'is-walking' : ''} ${waiting ? 'customer-waiting' : ''}`}>
@@ -366,7 +417,7 @@ export function PersonFigure({ color, staff = false, carry = 'bag', waiting = fa
     {staff && <path d="M-4 -29h8l3 14h-14z" fill="#f2f1db" opacity=".9" />}
     <rect x="-2.5" y="-38" width="5" height="7" rx="2" fill="#e6b694" />
     <ellipse cx="0" cy="-42" rx="7" ry="8" fill="#efc4a3" />
-    <path d="M-7 -42q-1-12 9-9q8 1 5 9l-3-5-6 1z" fill={staff ? '#665542' : '#59566c'} />
+    <path d="M-7 -42q-1-12 9-9q8 1 5 9l-3-5-6 1z" fill={staff ? '#665542' : hair} />
     {!staff && carry === 'bag' && <g><rect x="8" y="-19" width="9" height="12" rx="1.5" fill="#f2dfba" /><path d="M10 -18v-4h5v4" stroke="#c4ab83" fill="none" /></g>}
     {!staff && carry === 'box' && <g><rect x="7" y="-18" width="13" height="11" rx="1.5" fill="#cbd6de" /><path d="M9 -18h9M13.5 -18v11" stroke="#93a5b1" fill="none" /><rect x="10" y="-22" width="7" height="4" rx="1" fill="#9fb4c0" /></g>}
   </g>;

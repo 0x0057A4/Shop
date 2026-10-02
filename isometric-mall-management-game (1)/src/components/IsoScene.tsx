@@ -6,14 +6,15 @@ import type { VisibleGood } from '../game/visualInventory';
 import { createShopDisplay } from '../game/visualInventory';
 import { shade, shopPalette } from '../game/palette';
 import { normalizeColors } from '../game/engine';
-import type { Grid, Piece } from '../game/layout';
-import { FLOOR_Z, PLACE_LABELS, blockedTiles, doorTiles, footprint, freeSides, gridFor, gridOf, piecesOf, placeOf, placementFits } from '../game/layout';
+import type { Grid, Piece, Tile } from '../game/layout';
+import { FLOOR_Z, PLACE_LABELS, blockedTiles, doorTiles, footprint, freeSides, gridFor, gridOf, isInside, piecesOf, placeOf, placementFits } from '../game/layout';
 import { ARRANGE_KEYS, PICK_HEIGHT, canRotate, moveTarget, pickBox, pickPiece, rotateTarget } from './Arrange';
 import { serviceQueues } from '../game/services';
 import { staffRole } from '../game/engine';
 import { PieceView, Plant, Tree } from './ShopPieces';
 import type { StationView } from './ShopPieces';
-import { CustomerFigure, Person } from './Customers';
+import { CustomerFigure, Person, onApron } from './Customers';
+import { WalkerMotion } from './CustomerMotion';
 import { currentTile } from './Customers';
 import type { CrowdState } from './Customers';
 import { Cube, p, pts, polygon } from './isoGeometry';
@@ -99,11 +100,15 @@ export function depthOfPerson(x: number, y: number) {
   return x + y;
 }
 
-function IsoShop({ kind, shop, editing = false, crowd, onServe, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, preview = false, noGround = false, dark = false }: {
+function IsoShop({ kind, shop, editing = false, crowd, paused = false, crowdReduced = false, onServe, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, preview = false, noGround = false, dark = false }: {
   kind: ShopKind;
   shop: Shop;
   editing?: boolean;
   crowd?: CrowdState | null;
+  /** A paused game keeps the customers where they are. */
+  paused?: boolean;
+  /** No walk cycle when the user asked for reduced motion. */
+  crowdReduced?: boolean;
   /** Serving a waiting customer starts right here: click on the till or a service station. */
   onServe?: (serviceId: string) => void;
   onInteract?: Interaction;
@@ -163,6 +168,8 @@ function IsoShop({ kind, shop, editing = false, crowd, onServe, onInteract, onIn
     return () => window.clearTimeout(timer);
   }, [shop.expansions]);
   const walkers = crowd?.walkers ?? [];
+  // Inside the shop the floor tiles decide, in front of the door the pavement does.
+  const walkerGround = (tile: Tile) => !blocked.has(`${tile.x},${tile.y}`) && (isInside(tile, grid) || onApron(tile, grid));
   const queuePads = crowd ? serviceQueues(kind, shop, blocked).map(queue => ({ queue, waiting: (crowd.queues[queue.info.id] || []).length })) : [];
   const serviceSpots: ServiceSpot[] = serviceQueues(kind, shop, blocked).map(entry => ({
     id: entry.info.id,
@@ -559,6 +566,7 @@ function IsoShop({ kind, shop, editing = false, crowd, onServe, onInteract, onIn
       items.sort((a, b) => a.depth - b.depth);
       return items.map(item => item.node);
     })()}
+    {showCustomers && <WalkerMotion walkers={walkers} walkable={walkerGround} active={!paused} reduced={crowdReduced} />}
     <Cube x={-.22} y={roomD} w={6.9} d={.2} h={.75} top={wallTop} left={wallDeep} right={wallLight} />
     <g transform={`translate(${p(1.15,roomD + .24,.8).join(',')}) rotate(26.565)`}>
       <text fill="#fffdfd" fontSize="12" fontWeight="800" letterSpacing="1.4">{shop.name.toUpperCase()}</text>
@@ -608,13 +616,15 @@ function EmptyPlot({ x, y, label, onClick }: { x: number; y: number; label: stri
   </g>;
 }
 
-export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null, onServe, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, onSelect }: {
+export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null, crowdReduced = false, onServe, onInteract, onInspect, onMove, arrangeApi, onArrangeInfo, selected, onSelect }: {
   game: GameState;
   kind: ShopKind;
   mode: 'shop' | 'mall';
   zoom: number;
   editing?: boolean;
   crowd?: CrowdState | null;
+  /** Reduced motion: customers still stand in the right spot, but do not step. */
+  crowdReduced?: boolean;
   /** Clicking a till or service station serves the customer waiting there. */
   onServe?: (serviceId: string) => void;
   onInteract: Interaction;
@@ -637,7 +647,7 @@ export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null
     <defs><filter id="scene-shadow" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="12" stdDeviation="8" floodColor="#809c89" floodOpacity=".12" /></filter></defs>
     <g transform={`translate(430 250) scale(${zoom}) translate(-430 -250)`}>
       {mode === 'shop'
-        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} crowd={crowd} onServe={onServe} onInteract={onInteract} onInspect={onInspect} onMove={onMove} arrangeApi={arrangeApi} onArrangeInfo={onArrangeInfo} selected={selected} preview={!game.hasChosen} dark={game.theme === 'dark'} /></g>
+        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} crowd={crowd} crowdReduced={crowdReduced} paused={game.paused} onServe={onServe} onInteract={onInteract} onInspect={onInspect} onMove={onMove} arrangeApi={arrangeApi} onArrangeInfo={onArrangeInfo} selected={selected} preview={!game.hasChosen} dark={game.theme === 'dark'} /></g>
         : <g>
           <polygon points="35,216 443,12 817,202 410,422" fill="#e1eae0" />
           <path d="M160 275L550 80M250 330L654 128M330 180L653 341" stroke="#eeeee8" strokeWidth="36" />

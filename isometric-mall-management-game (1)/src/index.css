@@ -1044,28 +1044,17 @@ kbd { font-family: inherit; font-size: 7px; padding: 3px 5px; border: 1px solid 
 .piece-turn:hover .piece-turn-arrow, .piece-turn.is-active .piece-turn-arrow { stroke: #f4f9ef; }
 .arrange-note-tip rect { fill: #3f6b52; opacity: .95; }
 .arrange-note-tip text { font-size: 10px; font-weight: 700; fill: #f2f8ee; letter-spacing: .2px; }
-.customer-bob { animation: customer-step var(--step-ms, .42s) ease-in-out infinite; transform-origin: 0 0; }
-@keyframes customer-step { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.7px); } }
-.simulation-paused .customer-bob { animation-play-state: paused; }
-
-/* --- Laufzyklus: Beine, Arme und Schatten schwingen im Takt eines Kachelschritts --- */
-.person-leg, .person-arm { transform-box: view-box; }
-.person-figure.is-walking .person-leg, .person-figure.is-walking .person-arm {
-  animation-duration: var(--step-ms, .42s);
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
+/* --- Laufzyklus: Beine, Arme, Koerper und Schatten bewegt die Laufschleife (CustomerMotion) --- */
+/* Sie haengen am wirklich gelaufenen Weg, darum friert kein Bein mitten im Schritt ein. */
+/* --- Kommen und Gehen: Kunden tauchen an der Tuer auf und verschwinden draussen --- */
+.customer-walker.is-entering { animation: customer-enter .55s ease-out both; }
+.customer-walker.is-leaving { animation: customer-leave .72s ease-in both; }
+@keyframes customer-enter { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes customer-leave { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(2px); } }
+.simulation-paused .customer-walker.is-entering, .simulation-paused .customer-walker.is-leaving { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .customer-walker.is-entering, .customer-walker.is-leaving { animation-duration: .01ms; }
 }
-.person-figure.is-walking .person-leg { animation-name: person-leg-front; }
-.person-figure.is-walking .person-leg.is-back { animation-name: person-leg-back; }
-.person-figure.is-walking .person-arm { animation-name: person-arm-front; }
-.person-figure.is-walking .person-arm.is-back { animation-name: person-arm-back; }
-@keyframes person-leg-front { 0%, 100% { transform: rotate(-9deg); } 50% { transform: rotate(7deg) translateY(-1.5px); } }
-@keyframes person-leg-back { 0%, 100% { transform: rotate(7deg) translateY(-1.5px); } 50% { transform: rotate(-9deg); } }
-@keyframes person-arm-front { 0%, 100% { transform: rotate(8deg); } 50% { transform: rotate(-8deg); } }
-@keyframes person-arm-back { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(8deg); } }
-.customer-walker.is-walking .customer-shadow { animation: customer-shadow var(--step-ms, .42s) ease-in-out infinite; transform-origin: 0 0; }
-@keyframes customer-shadow { 0%, 100% { transform: scale(1); opacity: .15; } 50% { transform: scale(.86); opacity: .11; } }
-.simulation-paused .person-leg, .simulation-paused .person-arm, .simulation-paused .customer-shadow { animation-play-state: paused; }
 .arrange-note { display: flex; align-items: center; gap: 13px; padding: 15px 17px; border: 1px dashed #cbdac0; border-radius: 9px; background: #f7faf3; margin-bottom: 19px; }
 .arrange-note .arrange-icon { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; background: #e9f0e0; color: #75925f; flex: none; }
 .arrange-note h3 { font-size: 11.5px; font-weight: 700; color: #66805e; }
@@ -1074,8 +1063,10 @@ kbd { font-family: inherit; font-size: 7px; padding: 3px 5px; border: 1px solid 
 
 /* --- Wartende Kundschaft, Schlangen und Kassen-Minigames --- */
 .simulation-paused .customer-waiting { animation-play-state: paused; }
-.customer-waiting { animation: customer-wait 3.2s ease-in-out infinite; transform-origin: 0 0; }
-@keyframes customer-wait { 0%, 100% { transform: translateY(0) rotate(-.6deg); } 50% { transform: translateY(-1.2px) rotate(.8deg); } }
+.customer-waiting { animation: customer-wait 3.2s ease-in-out infinite; }
+/* Nur heben und senken: eine Drehung haengt am Ursprung des Koordinatensystems
+   und wuerde die Figur je nach Blickfeld meterweit wegziehen. */
+@keyframes customer-wait { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.2px); } }
 .queue-pad { fill: #b9d3ae4d; stroke: #9cbb8f; stroke-width: .8; stroke-dasharray: 2.5 2; }
 .queue-pad-label { font-size: 9px; font-weight: 800; fill: #6f8a63; }
 .service-ring { fill: #8cc47e1f; stroke: #7ba86c; stroke-width: 1.2; stroke-dasharray: 5 4; }
