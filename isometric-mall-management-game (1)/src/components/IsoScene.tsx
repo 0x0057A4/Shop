@@ -6,9 +6,13 @@ import type { VisibleGood } from '../game/visualInventory';
 import { createShopDisplay } from '../game/visualInventory';
 import type { Piece } from '../game/layout';
 import { DOOR_TILES, FLOOR_Z, GRID_H, GRID_W, PLACE_LABELS, blockedTiles, footprint, freeSides, piecesOf, placeOf, placementFits, rotatable } from '../game/layout';
+import { serviceQueues } from '../game/services';
 import { PieceView, Plant, Tree } from './ShopPieces';
 import type { StationView } from './ShopPieces';
-import { CustomerGroup, Person, useShopWalkers } from './Customers';
+import { CustomerGroup, Person } from './Customers';
+import type { CrowdState } from './Customers';
+import { PlayerAvatar } from './Player';
+import type { PlayerState } from './Player';
 import { Cube, p, pts, polygon } from './isoGeometry';
 
 function Bench({ x, y }: { x: number; y: number }) {
@@ -31,11 +35,16 @@ const GRAB_HEIGHT: Record<string, number> = { shelf: 96, workbench: 62, register
 
 interface DragState { id: string; kind: Piece['kind']; from: Placement; place: Placement; grabX: number; grabY: number; valid: boolean }
 
-function IsoShop({ kind, shop, editing = false, paused = false, onInteract, onInspect, onMove, selected, preview = false, noGround = false }: {
+export interface ServiceHint { id: string; label: string; count: number }
+
+function IsoShop({ kind, shop, editing = false, crowd, player, serviceHint, busy = false, onInteract, onInspect, onMove, selected, preview = false, noGround = false }: {
   kind: ShopKind;
   shop: Shop;
   editing?: boolean;
-  paused?: boolean;
+  crowd?: CrowdState | null;
+  player?: PlayerState | null;
+  serviceHint?: ServiceHint | null;
+  busy?: boolean;
   onInteract?: Interaction;
   onInspect?: (good: VisibleGood) => void;
   onMove?: (id: string, place: Placement) => void;
@@ -57,7 +66,11 @@ function IsoShop({ kind, shop, editing = false, paused = false, onInteract, onIn
   const groupRef = useRef<SVGGElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
-  const { walkers, reduced } = useShopWalkers(shop, display, showCustomers, paused);
+  const walkers = crowd?.walkers ?? [];
+  const queuePads = crowd ? serviceQueues(kind, shop, blocked).map(queue => ({ queue, waiting: (crowd.queues[queue.info.id] || []).length })) : [];
+  const hintKind = serviceHint ? (serviceHint.id.split('-')[0] as Piece['kind']) : null;
+  const hintPlace = serviceHint && hintKind ? placeOf(layout, { id: serviceHint.id, kind: hintKind, index: 0 }) : null;
+  const hintSize = hintKind && hintPlace ? footprint(hintKind, hintPlace.rot) : null;
 
   const stationJobs = shop.queue.slice(0, Math.min(shop.furniture.workbench, shop.staff));
   const stations: StationView[] = pieces.filter(piece => piece.kind === 'workbench').map(piece => {
@@ -215,15 +228,30 @@ function IsoShop({ kind, shop, editing = false, paused = false, onInteract, onIn
       <text x="86" y="-3" textAnchor="middle" fill={tcg ? '#725297' : it ? '#47718d' : '#9d7351'} fontSize={shop.name.length > 15 ? 13 : 18} fontWeight="800" letterSpacing="1">{shop.name.toUpperCase()}</text>
       <rect x="18" y="15" width="42" height="3" rx="1.5" fill={accent} opacity=".25" /><rect x="70" y="15" width="78" height="3" rx="1.5" fill={accent} opacity=".25" />
     </g>
+    {queuePads.filter(entry => entry.waiting > 0).map(({ queue, waiting }) => <g key={`queue-${queue.info.id}`} className="queue-pads" pointerEvents="none">
+      {queue.spots.slice(0, Math.max(waiting, 1)).map((spot, index) => <g key={`${spot.x}-${spot.y}`}>
+        <polygon points={polygon([[spot.x + .12, spot.y + .12, FLOOR_Z + .005], [spot.x + .88, spot.y + .12, FLOOR_Z + .005], [spot.x + .88, spot.y + .88, FLOOR_Z + .005], [spot.x + .12, spot.y + .88, FLOOR_Z + .005]])} className="queue-pad" />
+        {index === 0 && <text x={p(spot.x + .5, spot.y + .5, FLOOR_Z)[0]} y={p(spot.x + .5, spot.y + .5, FLOOR_Z)[1] + 3} textAnchor="middle" className="queue-pad-label">{waiting}</text>}
+      </g>)}
+    </g>)}
+    {serviceHint && hintPlace && hintSize && <g className="service-marker" pointerEvents="none">
+      <polygon points={polygon([[hintPlace.x - .06, hintPlace.y - .06, FLOOR_Z + .012], [hintPlace.x + hintSize.w + .06, hintPlace.y - .06, FLOOR_Z + .012], [hintPlace.x + hintSize.w + .06, hintPlace.y + hintSize.d + .06, FLOOR_Z + .012], [hintPlace.x - .06, hintPlace.y + hintSize.d + .06, FLOOR_Z + .012]] as [number, number, number][])} className="service-ring" />
+      {(() => {
+        const [bx, by] = p(hintPlace.x + hintSize.w / 2, hintPlace.y + hintSize.d / 2, 3.3);
+        const width = Math.max(126, serviceHint.label.length * 8.6 + 96);
+        return <g transform={`translate(${bx},${by})`} className="service-badge-group">
+          <rect x={-width / 2} y={-19} width={width} height={30} rx={15} className="service-badge" />
+          <circle cx={-width / 2 + 19} cy={-4} r={9.5} className="service-badge-key" />
+          <text x={-width / 2 + 19} y={-.5} textAnchor="middle" className="service-badge-key-text">E</text>
+          <text x={-width / 2 + 35} y={.5} className="service-badge-text">{serviceHint.label}{serviceHint.count > 0 ? ` · ${serviceHint.count} wartend` : ' · niemand wartet'}</text>
+        </g>;
+      })()}
+    </g>}
     {ordered.filter(entry => entry.piece.id !== drag?.id).map(entry => pieceNode(entry.piece, entry.place, false))}
     {drag && (() => { const entry = placed.find(candidate => candidate.piece.id === drag.id); return entry ? pieceNode(entry.piece, drag.place, true) : null; })()}
     {staffSpots.map(([x, y], index) => <Person key={`staff-${index}`} x={x} y={y} color={index === 0 ? '#96aabe' : '#b5a0c5'} staff />)}
-    {showCustomers && !reduced && <CustomerGroup walkers={walkers} />}
-    {showCustomers && reduced && <g>
-      <Person x={1.6} y={2.6} color="#ddb28c" />
-      <Person x={6.6} y={1.6} color="#89abc3" />
-      <Person x={2.6} y={5.4} color="#c89eab" />
-    </g>}
+    {showCustomers && <CustomerGroup walkers={walkers} />}
+    {player && <PlayerAvatar player={player} busy={busy} />}
     <Cube x={-.22} y={7} w={6.9} d={.2} h={.75} top="#d4c3e1" left={tcg ? '#b59cce' : it ? '#9fbecf' : '#d2aa83'} right="#c5b0d9" />
     <g transform={`translate(${p(1.15,7.24,.8).join(',')}) rotate(26.565)`}>
       <text fill="#fffdfd" fontSize="12" fontWeight="800" letterSpacing="1.4">{shop.name.toUpperCase()}</text>
@@ -261,12 +289,16 @@ function EmptyPlot({ x, y, label, onClick }: { x: number; y: number; label: stri
   </g>;
 }
 
-export function IsoScene({ game, kind, mode, zoom, editing = false, onInteract, onInspect, onMove, selected, onSelect }: {
+export function IsoScene({ game, kind, mode, zoom, editing = false, crowd = null, player = null, serviceHint = null, busy = false, onInteract, onInspect, onMove, selected, onSelect }: {
   game: GameState;
   kind: ShopKind;
   mode: 'shop' | 'mall';
   zoom: number;
   editing?: boolean;
+  crowd?: CrowdState | null;
+  player?: PlayerState | null;
+  serviceHint?: ServiceHint | null;
+  busy?: boolean;
   onInteract: Interaction;
   onInspect: (good: VisibleGood) => void;
   onMove?: (id: string, place: Placement) => void;
@@ -283,7 +315,7 @@ export function IsoScene({ game, kind, mode, zoom, editing = false, onInteract, 
     <defs><filter id="scene-shadow" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="12" stdDeviation="8" floodColor="#809c89" floodOpacity=".12" /></filter></defs>
     <g transform={`translate(430 250) scale(${zoom}) translate(-430 -250)`}>
       {mode === 'shop'
-        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} paused={game.paused} onInteract={onInteract} onInspect={onInspect} onMove={onMove} selected={selected} preview={!game.hasChosen} /></g>
+        ? <g filter="url(#scene-shadow)"><IsoShop kind={kind} shop={game.shops[kind]} editing={editing} crowd={crowd} player={player} serviceHint={serviceHint} busy={busy} onInteract={onInteract} onInspect={onInspect} onMove={onMove} selected={selected} preview={!game.hasChosen} /></g>
         : <g>
           <polygon points="35,216 443,12 817,202 410,422" fill="#e1eae0" />
           <path d="M160 275L550 80M250 330L654 128M330 180L653 341" stroke="#eeeee8" strokeWidth="36" />
@@ -291,7 +323,7 @@ export function IsoScene({ game, kind, mode, zoom, editing = false, onInteract, 
             const transform = ['translate(-30 15) scale(.53)', 'translate(360 -8) scale(.5)', 'translate(185 248) scale(.43)'][index];
             const empty = [{x:55,y:165},{x:485,y:98},{x:238,y:311}][index];
             const visible = game.hasChosen ? game.shops[k].owned : k === kind;
-            return visible ? <g key={k} transform={transform} onClick={() => onSelect(k)} className="mall-shop" role="button" tabIndex={0} aria-label={`${game.shops[k].name} ansehen`} onKeyDown={e => { if (e.key === 'Enter') onSelect(k); }}><IsoShop kind={k} shop={game.shops[k]} paused={game.paused} noGround preview={!game.hasChosen} /></g> : <EmptyPlot key={k} {...empty} label={SHOPS[k].label} onClick={() => onInteract('expand')} />;
+            return visible ? <g key={k} transform={transform} onClick={() => onSelect(k)} className="mall-shop" role="button" tabIndex={0} aria-label={`${game.shops[k].name} ansehen`} onKeyDown={e => { if (e.key === 'Enter') onSelect(k); }}><IsoShop kind={k} shop={game.shops[k]} noGround preview={!game.hasChosen} /></g> : <EmptyPlot key={k} {...empty} label={SHOPS[k].label} onClick={() => onInteract('expand')} />;
           })}
           <g transform="translate(430 239)"><ellipse cx="0" cy="0" rx="34" ry="18" fill="#c1d3cb" /><ellipse cx="0" cy="-5" rx="31" ry="17" fill="#a3c8d0" /><ellipse cx="0" cy="-8" rx="25" ry="13" fill="#c9e4e4" /><path d="M0-10v-35m-10 15q10-27 20 0" stroke="#e4f3ee" strokeWidth="3" fill="none" /><circle cx="0" cy="-48" r="4" fill="#e7f5f0" /></g>
           <g transform="translate(50 123) scale(.6)"><Tree x={0} y={0} /></g><g transform="translate(515 218) scale(.6)"><Tree x={0} y={0} /></g>

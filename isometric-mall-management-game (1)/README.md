@@ -19,6 +19,12 @@ Eine deutschsprachige, lokal spielbare isometrische Einkaufszentrum-Simulation m
 - Die Auslagen zeigen konkrete Artikel statt generischer Platzhalter: Nova-Booster, Einzelkarten, Decks, RAM-Module, PCs, Laptops, Brot, Croissants, Törtchen und die tatsächlichen Rohstoffe. Karten erscheinen nur, wenn sie zum Verkauf gelistet sind.
 - Jede sichtbare Verkaufseinheit wird vom echten Lagerbestand abgezogen. Wenn ein Artikel verkauft oder hergestellt wird, aktualisiert sich die Szene. Die Zahl der dargestellten Regale entspricht genau den gekauften Regalen. Laufende Aufträge erscheinen separat als **in Arbeit** und werden nicht als fertige Lagerware gezählt.
 - Kunden betreten den Laden durch die Tür, laufen zwischen den Möbeln hindurch, bleiben vor Regalen stehen und verlassen den Laden wieder. Sie folgen dabei den freien Kacheln, weichen Hindernissen aus und passen sich an, wenn du Möbel verschiebst. Ihre Zahl wächst mit der Beliebtheit.
+- Wer kaufen will, reiht sich hinter der Kasse oder der Werkbank in eine Schlange ein. Die Warteschlange ist auf dem Boden als Kette gestrichelter Felder sichtbar und rückt Stück für Stück vor. Läuft der vorderste Kunde an, ist die Kasse bereit.
+- Du steuerst eine eigene Spielfigur durch den Laden (grüne Figur mit Namensschild **DU**). Sie läuft über dieselben freien Kacheln wie die Kunden; Hindernisse, Wände und Möbel blockieren sie genauso.
+- Stehst du neben Kasse oder Werkbank und ein Kunde ist vorgerückt, drückst du **E** oder den Knopf **Bedienen**. Dann beginnt der aktive Kassiervorgang: Warenkorb prüfen, bezahlen, Bon ansehen.
+- **Barzahlung:** Der Kunde gibt einen Schein, du stellst das Wechselgeld aus Scheinen und Münzen zusammen. Stimmt der Betrag exakt, gibt es 8 % Trinkgeld; zu viel ausgelegte Stücke nimmst du per Klick zurück.
+- **Kartenzahlung:** Der Kunde steckt die Karte ins Terminal, du ziehst sie mit Maus oder Finger einmal komplett von links nach rechts durch. Mit **→** (gedrückt halten) geht es auch per Tastatur.
+- Erst nach dem Bezahlen verschwindet die Ware aus dem Regal und der Erlös landet in der Kasse. Mit **Nicht jetzt** schickst du einen Kunden weg – er verlässt verärgert den Laden und die Beliebtheit sinkt leicht.
 - Klicke eine Ware in der Szene oder nutze **Waren**, um ihren exakten Gesamtbestand, den sichtbaren Bestand und den aktuellen Preis zu sehen. Über den Einblick gelangst du zur passenden Lager-, Sammlungs- oder Produktionsansicht.
 - Der Ladenboden besteht aus 9 × 7 Kacheln. Kasse, Auslage, Mittelvitrine, Rohstoffregal, Regale, Arbeitsplätze und Deko lassen sich frei auf diesen Kacheln verschieben und drehen. Die Anordnung wird mitgespeichert; belegte Flächen, Wände und der Eingang bleiben gesperrt.
 - Zusätzliche Läden können gekauft und in einer gemeinsamen Mall-Ansicht besucht werden.
@@ -31,7 +37,9 @@ Eine deutschsprachige, lokal spielbare isometrische Einkaufszentrum-Simulation m
 3. Im Bereich **Produktion** Rezepte starten oder automatische Nachproduktion aktivieren.
 4. Im **Lager & Einkauf** Rohstoffe bestellen, Preise ändern und Artikel verkaufen.
 5. Über **Meine Läden** weitere Geschäfte eröffnen.
-6. Auf **Anordnen** in der Ladenansicht (oder **Im Laden anordnen** unter **Einrichtung**) wechselst du in den Einrichtungsmodus. Ziehe Möbel mit der Maus oder den Fingern auf eine freie Kachel. Mit den **Pfeiltasten** verschiebst du das gewählte Möbelstück Kachel für Kachel, mit **R** drehst du es. Grüne Felder sind frei, rote Felder belegt.
+6. Mit **WASD** oder den **Pfeiltasten** läufst du als Figur durch den Laden. Auf Touchgeräten erscheint unten links ein Steuerkreuz mit **E**-Knopf.
+7. Stell dich neben Kasse oder Werkbank und drücke **E**, sobald ein Kunde vorgerückt ist: Der Kassiervorgang öffnet sich, du bedienst Bar- oder Kartenzahlung und bestätigst mit **Nächster Kunde**.
+8. Auf **Anordnen** in der Ladenansicht (oder **Im Laden anordnen** unter **Einrichtung**) wechselst du in den Einrichtungsmodus. Ziehe Möbel mit der Maus oder den Fingern auf eine freie Kachel. Mit den **Pfeiltasten** verschiebst du das gewählte Möbelstück Kachel für Kachel, mit **R** drehst du es. Grüne Felder sind frei, rote Felder belegt.
 
 **Leertaste** pausiert die Simulation, **1 / 2 / 3** ändern das Tempo und **Esc** schliesst Dialoge. Kamera-Zoom, Zurücksetzen und Vollbild sind direkt in der Spielwelt erreichbar.
 
@@ -44,10 +52,13 @@ Automatische Speicherung im Browserspeicher unter `mallside-save-v1`. Auch die M
 - `src/App.tsx`: Einstieg, Navigation, Dialoge, Speicherung und Simulationstakt.
 - `src/game/data.ts`: Ladentypen, Materialien, Rezepte und Einrichtungsdefinitionen.
 - `src/game/layout.ts`: Kachel-Raster, Grundflächen, Kollisionen, Pfadsuche für Kunden.
+- `src/game/services.ts`: Dienstleistungen und Kassen, Warteschlangenplätze, Warenkörbe, Scheine und Münzen, Wechselgeld-Rechnung.
+- `src/components/Player.tsx`: Spielfigur mit Tastatur- und Touchsteuerung.
+- `src/components/RegisterGame.tsx`: Kassiervorgang mit Bargeld- und Karten-Minispiel sowie Kassenbon.
 - `src/game/engine.ts`: Produktion, Handel, Reparaturen, Erweiterung, Möbelverschieben und Spielstand-Validierung.
 - `src/components/IsoScene.tsx`: interaktive isometrische SVG-Spielwelt inklusive Kachel-Editor.
 - `src/components/ShopPieces.tsx`: Kassen, Regale, Auslagen, Arbeitsplätze und Deko auf Kacheln.
-- `src/components/Customers.tsx`: laufende Kunden mit Pfaden über die freien Kacheln.
+- `src/components/Customers.tsx`: laufende Kunden mit Pfaden über die freien Kacheln, Warteschlangen und Bedienlogik.
 - `src/components/Cards.tsx`: Kartenillustrationen und animiertes Pack-Opening.
 - `src/components/ManagementViews.tsx`: Herstellung, Inventar, Einrichtung, Personal, Finanzen und Aufgaben.
 - `src/index.css`: responsives Design und reduzierte Bewegungen bei entsprechender Systemeinstellung.

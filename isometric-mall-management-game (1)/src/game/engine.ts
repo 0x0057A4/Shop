@@ -1,6 +1,7 @@
-import { CARD_NAMES, SHOPS, SHOP_ORDER, clock, getItem } from './data';
+import { CARD_NAMES, SHOPS, SHOP_ORDER, clock, getItem, money } from './data';
 import type { FurnitureKind, GameState, Placement, RepairOrder, Shop, ShopKind, TradingCard } from './data';
 import { normalizeLayout, piecesOf, placementFits, placeOf } from './layout';
+import type { QueueCustomer } from './services';
 
 export const SAVE_KEY = 'mallside-save-v1';
 const id = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -255,6 +256,58 @@ function creditSale(game: GameState, shop: Shop, amount: number, count = 1) {
   shop.sold += count;
   const hour = Math.max(0, Math.min(11, Math.floor(game.minute / 60) - 9));
   shop.hourlyRevenue[hour] += amount;
+}
+
+export interface CheckoutResult {
+  game: GameState;
+  /** Money the customer paid, including the tip. */
+  earned: number;
+  tip: number;
+  /** Number of items that actually left the shelf. */
+  units: number;
+  /** Items the customer wanted but that were already sold out. */
+  missing: string[];
+}
+
+/**
+ * Serves one customer at the register: the goods leave the shelf (and with them
+ * the shop display), the money goes to the till and a perfect payment earns a tip.
+ */
+/** The player does not serve this customer; they leave without buying anything. */
+export function skipCustomer(game: GameState, kind: ShopKind, customer: QueueCustomer): GameState {
+  const next = structuredClone(game);
+  const shop = next.shops[kind];
+  shop.popularity = Math.max(0, shop.popularity - 1);
+  addEvent(next, 'Kunde geht', `${customer.label} wartet nicht länger und verlässt den Laden.`, 'info');
+  return next;
+}
+
+export function checkout(game: GameState, kind: ShopKind, customer: QueueCustomer, perfect: boolean): CheckoutResult {
+  const next = structuredClone(game);
+  const shop = next.shops[kind];
+  let earned = 0;
+  let units = 0;
+  const missing: string[] = [];
+  customer.lines.forEach(line => {
+    if (line.itemId === 'service') { earned += line.price; return; }
+    const available = Math.max(0, Math.floor(shop.stock[line.itemId] || 0));
+    const sold = Math.min(available, line.quantity);
+    if (sold < line.quantity) missing.push(line.name);
+    if (!sold) return;
+    shop.stock[line.itemId] = available - sold;
+    earned += line.price * sold;
+    units += sold;
+  });
+  const tip = perfect && earned > 0 ? Math.round(earned * 0.08) : 0;
+  if (earned > 0) {
+    creditSale(next, shop, earned + tip, units);
+    shop.popularity = Math.min(99, shop.popularity + 1);
+    addEvent(next, 'Kasse: Kunde bedient', `${customer.label} · +${money(earned + tip)}${tip ? ` (${money(tip)} Trinkgeld)` : ''} · ${customer.method === 'cash' ? 'Barzahlung' : 'Kartenzahlung'}`, 'sale');
+  } else {
+    shop.popularity = Math.max(0, shop.popularity - 1);
+    addEvent(next, 'Leider ausverkauft', `Für ${customer.label} war nichts mehr im Regal. Bestelle neue Ware im Lager.`, 'info');
+  }
+  return { game: next, earned: earned + tip, tip, units, missing };
 }
 
 export function sellStock(game: GameState, kind: ShopKind, itemId: string): GameState {

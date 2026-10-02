@@ -40,6 +40,9 @@ export default function App() {
   const [mobileOpen,setMobileOpen]=useState(false);
   const audio=useRef<AudioContext|null>(null);
   const importInput=useRef<HTMLInputElement>(null);
+  /** Always the newest state, also for actions that need it right away (the register). */
+  const gameRef=useRef(game);
+  gameRef.current=game;
   const kind=game.hasChosen ? game.selected : pending;
   const shop=game.shops[kind];
   const copy=PAGE_COPY[page];
@@ -55,13 +58,17 @@ export default function App() {
       const seconds=Math.min(300,elapsed);
       if(seconds<1)return;
       last+=elapsed*1000;
-      setGame(previous=>advance(previous,seconds*previous.speed));
+      setGame(previous=>{const next=advance(previous,seconds*previous.speed);gameRef.current=next;return next;});
     },1000);
     return()=>window.clearInterval(timer);
   },[]);
 
   const update:UpdateGame=useCallback((action,message)=>{
-    setGame(previous=>{const next=action(previous);return next === previous ? previous : {...next,savedAt:Date.now()};});
+    const previous=gameRef.current;
+    const changed=action(previous);
+    const next=changed === previous ? previous : {...changed,savedAt:Date.now()};
+    gameRef.current=next;
+    setGame(next);
     if(message){notify(message);if(game.sound){try{
       audio.current ||= new AudioContext();void audio.current.resume();
       const tone=audio.current.createOscillator(),gain=audio.current.createGain();
@@ -145,7 +152,7 @@ export default function App() {
       <main className="workspace"><div className="page-heading"><div><span className="eyebrow">{copy.eyebrow}</span><h1>{copy.title}</h1><p>{copy.description}</p></div><button className="button secondary header-action" onClick={()=>page !== 'overview' ? goPage('overview') : showModal(game.hasChosen ? 'shops' : 'help')}><Icon name={page !== 'overview' ? 'store' : game.hasChosen ? 'plus' : 'book'} size={16}/>{page !== 'overview' ? 'Zur Ladenansicht' : game.hasChosen ? 'Neuen Laden eröffnen' : 'Spiel entdecken'}{page === 'overview' && game.hasChosen && <Icon name="arrowUp" size={15}/>}</button></div>
         {!game.hasChosen && <button className="mobile-start-prompt" onClick={()=>showModal('shops')}><span><Icon name="store" size={16}/>Wähle deinen ersten Laden</span><Icon name="arrow" size={16}/></button>}
         <div className="content-layout"><div className="main-column"><AnimatePresence mode="wait"><motion.div className="page-content" key={`${page}-${page === 'production' ? productionTab : ''}-${page === 'overview' ? 'world' : kind}`} initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-5}} transition={{duration:.2}}>
-          {page === 'overview' && <><WorldPanel game={game} kind={kind} mode={mode} setMode={setMode} zoom={zoom} setZoom={setZoom} update={update} onNavigate={goPage} onInspectInventory={inspectInventory} onModal={showModal} onSpecial={special} notify={notify} editLayout={arrange} onEditLayout={setArrange}/><ActivityFeed game={game} onMore={()=>showModal('activity')}/></>}
+          {page === 'overview' && <><WorldPanel game={game} kind={kind} mode={mode} setMode={setMode} zoom={zoom} setZoom={setZoom} update={update} onNavigate={goPage} onInspectInventory={inspectInventory} onModal={showModal} onSpecial={special} notify={notify} editLayout={arrange} onEditLayout={setArrange} readGame={()=>gameRef.current} uiBlocked={modal !== null}/><ActivityFeed game={game} onMore={()=>showModal('activity')}/></>}
           {page === 'production' && <ProductionView {...viewProps} initialTab={productionTab}/>}
           {page === 'inventory' && <InventoryView {...viewProps} initialTab={inventoryTab}/>}
           {page === 'furnishing' && <FurnishingView {...viewProps} onArrange={arrangeFurniture}/>}

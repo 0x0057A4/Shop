@@ -223,6 +223,10 @@ export const RARITY_LABELS: Record<TradingCard['rarity'], string> = {
 };
 
 export const money = (n: number) => new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 }).format(n) + ' €';
+/** Prices with cents, used at the register where every cent counts. */
+export const money2 = (n: number) => new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n) + ' €';
+/** Rounds a price to full five cents, so it can be paid with real coins. */
+export const roundCents = (n: number) => Math.round(n * 20) / 20;
 export const number = (n: number) => new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 }).format(n);
 export const clock = (minute: number) => `${Math.floor(minute / 60).toString().padStart(2, '0')}:${Math.floor(minute % 60).toString().padStart(2, '0')}`;
 export const getItem = (kind: ShopKind, id: string) => SHOPS[kind].items.find(item => item.id === id);
